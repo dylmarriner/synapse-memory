@@ -1,0 +1,23 @@
+{
+  "name": "@synapse/paperclip-adapter",
+  "version": "0.1.0",
+  "description": "Paperclip adapter plugin for Synapse Enterprise Memory",
+  "private": true,
+  "type": "module",
+  "main": "./dist/worker.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@paperclipai/plugin-sdk": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "paperclip": {
+    "plugins": [
+      "./manifest.json"
+    ]
+  }
+}

@@ -1,0 +1,131 @@
+{
+  "name": "synapse-memory",
+  "displayName": "Synapse Memory",
+  "description": "Persistent AI memory backbone for agents — store/retrieve project knowledge across sessions, devices, and tools. Works in VS Code, Windsurf, and Antigravity IDE.",
+  "version": "0.1.0",
+  "publisher": "synapse-enterprise",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lin/synapse-mcp"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "memory",
+    "ai",
+    "context",
+    "persistent",
+    "knowledge",
+    "brain"
+  ],
+  "icon": "icon.png",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "synapse.store",
+        "title": "Synapse: Store Memory"
+      },
+      {
+        "command": "synapse.retrieve",
+        "title": "Synapse: Retrieve Memories"
+      },
+      {
+        "command": "synapse.health",
+        "title": "Synapse: Check Server Status"
+      },
+      {
+        "command": "synapse.context",
+        "title": "Synapse: Get Context Pack"
+      },
+      {
+        "command": "synapse.configure",
+        "title": "Synapse: Configure Server"
+      },
+      {
+        "command": "synapse.openDashboard",
+        "title": "Synapse: Open Dashboard"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "synapse-sidebar",
+          "title": "Synapse Memory",
+          "icon": "$(database)"
+        }
+      ]
+    },
+    "views": {
+      "synapse-sidebar": [
+        {
+          "id": "synapse.overview",
+          "name": "Memory Overview"
+        },
+        {
+          "id": "synapse.quickStore",
+          "name": "Quick Store"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Synapse Memory",
+      "properties": {
+        "synapse.serverUrl": {
+          "type": "string",
+          "default": "http://100.91.55.113:8765/mcp",
+          "description": "Synapse MCP server URL"
+        },
+        "synapse.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for multi-tenant mode"
+        },
+        "synapse.defaultProject": {
+          "type": "string",
+          "default": "default",
+          "description": "Default project key"
+        },
+        "synapse.autoSync": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-sync context on file save"
+        }
+      }
+    },
+    "statusBar": {
+      "synapse.connected": {
+        "text": "$(database) Synapse",
+        "tooltip": "Synapse Memory — Click to open dashboard",
+        "command": "synapse.openDashboard"
+      },
+      "synapse.disconnected": {
+        "text": "$(circle-slash) Synapse",
+        "tooltip": "Synapse Memory — Server unreachable",
+        "command": "synapse.configure"
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./tsconfig.json",
+    "watch": "tsc -watch -p ./tsconfig.json",
+    "package": "vsce package",
+    "package:ovsx": "npx ovsx package"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.0.0",
+    "vsce": "^2.0.0"
+  }
+}

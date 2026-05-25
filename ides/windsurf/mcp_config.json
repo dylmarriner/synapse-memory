@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "synapse": {
+      "url": "http://100.91.55.113:8765/mcp",
+      "timeout": 120,
+      "connect_timeout": 30,
+      "description": "Synapse Enterprise Memory — persistent AI memory backbone. Store/retrieve project knowledge across sessions and devices."
+    }
+  }
+}

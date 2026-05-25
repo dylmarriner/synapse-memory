@@ -1,0 +1,19 @@
+name: synapse-memory
+version: 1.0.0
+description: "Synapse Memory — persistent AI memory backbone. Store/retrieve project knowledge across sessions and devices."
+author: Synapse Enterprise
+provides_tools:
+  - synapse_health
+  - synapse_store
+  - synapse_retrieve
+  - synapse_update
+  - synapse_delete
+  - synapse_context
+  - synapse_rank
+  - synapse_memory
+provides_hooks: []
+requires_env:
+  - name: SYNAPSE_API_KEY
+    description: "Synapse tenant API key (leave empty for single-tenant mode)"
+    secret: true
+    url: "http://100.91.55.113:8765/mcp"

@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Node
+node_modules/
+package-lock.json
+*.vsix
+
+# TypeScript
+*.js.map
+
+# IDE
+.idea/
+.vscode/
+.vscode-test/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.key
+*.pem
+
+# Local data
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Service files (user-specific)
+systemd/*.service
+
+# SDK build artifacts
+sdk/typescript/dist/
