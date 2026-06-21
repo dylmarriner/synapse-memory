@@ -1,7 +1,0 @@
-{
-  "mcpServers": {
-    "synapse": {
-      "url": "http://100.91.55.113:8765/mcp"
-    }
-  }
-}

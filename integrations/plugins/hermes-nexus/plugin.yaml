@@ -1,0 +1,18 @@
+name: nexus-memory
+version: 1.0.0
+description: "Nexus Memory — unified AI memory backbone (semantic · lexical · graph · temporal recall)."
+author: Nexus
+provides_tools:
+  - nexus_health
+  - nexus_store
+  - nexus_recall
+  - nexus_context
+  - nexus_learn
+  - nexus_reflect
+requires_env:
+  - name: NEXUS_SECRET
+    description: "Nexus Bearer token (from .env on the Nexus server)"
+    secret: true
+  - name: NEXUS_URL
+    description: "Nexus MCP endpoint"
+    default: "http://100.93.75.87:7777/mcp"

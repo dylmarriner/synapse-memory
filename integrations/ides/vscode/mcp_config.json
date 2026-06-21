@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "nexus": {
+      "url": "http://100.93.75.87:7777/mcp",
+      "headers": {
+        "Authorization": "Bearer ${NEXUS_SECRET}"
+      }
+    }
+  }
+}

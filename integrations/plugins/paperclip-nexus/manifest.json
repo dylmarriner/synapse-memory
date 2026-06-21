@@ -1,0 +1,48 @@
+{
+  "id": "nexus-memory",
+  "name": "Nexus Memory",
+  "version": "1.0.0",
+  "description": "Unified AI memory for Paperclip agents — semantic · lexical · graph · temporal recall via Nexus.",
+  "author": "Nexus",
+  "worker": "./dist/worker.js",
+  "tools": [
+    {
+      "name": "nexus_save",
+      "description": "Save a memory to Nexus (auto-classifies type, persists across devices).",
+      "params": {
+        "content":     { "type": "string" },
+        "kind":        { "type": "string", "enum": ["world","experience","observation","preference","lesson"] },
+        "importance":  { "type": "number", "default": 0.5 },
+        "tags":        { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    {
+      "name": "nexus_recall",
+      "description": "Search memories with 4-way hybrid recall (vector + lexical + graph + temporal).",
+      "params": {
+        "query": { "type": "string" },
+        "limit": { "type": "number", "default": 10 }
+      }
+    },
+    {
+      "name": "nexus_context",
+      "description": "Get full agent context: representation, memories, conclusions.",
+      "params": {
+        "tokens": { "type": "number", "default": 2000 }
+      }
+    },
+    {
+      "name": "nexus_reflect",
+      "description": "LLM synthesis over memories — returns structured insights.",
+      "params": {
+        "query": { "type": "string" },
+        "depth": { "type": "string", "enum": ["low","mid","high"], "default": "mid" }
+      }
+    },
+    {
+      "name": "nexus_status",
+      "description": "Check Nexus health.",
+      "params": {}
+    }
+  ]
+}

@@ -1,0 +1,404 @@
+"""
+Nexus — Unified Agent Memory Server
+Tailscale: http://100.93.75.87:7777
+MCP: http://100.93.75.87:7777/mcp
+Dashboard: http://100.93.75.87:7777/
+"""
+
+import asyncio
+import hashlib
+import hmac
+import logging
+import socket
+import time
+from contextlib import asynccontextmanager
+
+import redis.asyncio as aioredis
+from fastapi import FastAPI, Depends, HTTPException, Request, Response, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, FileResponse
+from sqlalchemy import text
+
+from app.config import settings
+
+
+def _make_dashboard_token() -> str:
+    """Generate a short-lived HMAC token scoped to dashboard read-only access."""
+    ts = str(int(time.time()) // 3600)
+    return hmac.new(
+        settings.nexus_secret.encode(), f"dashboard:{ts}".encode(), hashlib.sha256
+    ).hexdigest()[:48]
+
+
+def _verify_dashboard_token(token: str) -> bool:
+    """Verify a dashboard-scoped token (valid for current and previous hour)."""
+    if not settings.nexus_secret:
+        return False
+    for offset in (0, -1):
+        ts = str(int(time.time()) // 3600 + offset)
+        expected = hmac.new(
+            settings.nexus_secret.encode(), f"dashboard:{ts}".encode(), hashlib.sha256
+        ).hexdigest()[:48]
+        if hmac.compare_digest(token, expected):
+            return True
+    return False
+from app.db import engine, SessionLocal
+from app.models.schema import Base
+from app.routers.memory import router as memory_router
+from app.routers.agents import router as agents_router
+from app.routers.search import router as search_router
+from app.routers.admin import router as admin_router
+from app.routers.browse import router as browse_router
+from app.routers.stream import router as stream_router
+from app.mcp import mcp_router
+from app.routers.sys_bridge import router as sys_bridge_router
+from app.routers.synapse import router as synapse_router
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+log = logging.getLogger("nexus")
+
+
+async def _run_migrations():
+    """Apply schema upgrades safely using IF NOT EXISTS / ADD COLUMN IF NOT EXISTS."""
+    async with engine.begin() as conn:
+        # Base tables via ORM
+        await conn.run_sync(Base.metadata.create_all)
+
+        # Add new columns if upgrading from an older schema
+        for col_sql in [
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS confirmed_count INT NOT NULL DEFAULT 0",
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS contradicted_count INT NOT NULL DEFAULT 0",
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 1",
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS superseded_by UUID REFERENCES memories(id) ON DELETE SET NULL",
+        ]:
+            try:
+                await conn.execute(text(col_sql))
+            except Exception:
+                pass
+
+        # Summaries table (in case ORM didn't create it yet)
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS summaries (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                agent_id    UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+                content     TEXT NOT NULL,
+                memory_count INT NOT NULL DEFAULT 0,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """))
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_summaries_agent ON summaries(agent_id)"
+        ))
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_summaries_agent_time ON summaries(agent_id, created_at DESC)"
+        ))
+
+        for index_sql in [
+            "CREATE INDEX IF NOT EXISTS idx_memories_embedding_hnsw ON memories USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)",
+            "CREATE INDEX IF NOT EXISTS idx_memories_type_priority ON memories(memory_type, importance DESC, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_memories_tags_gin ON memories USING gin ((metadata->'tags'))",
+        ]:
+            try:
+                await conn.execute(text(index_sql))
+            except Exception as e:
+                log.warning("Optional index skipped: %s", e)
+
+        # Synapse-compat tables: projects, file_index, events
+        for compat_sql in [
+            """
+            CREATE TABLE IF NOT EXISTS projects (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                key         TEXT NOT NULL UNIQUE,
+                name        TEXT NOT NULL,
+                root        TEXT,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS file_index (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                project_key TEXT NOT NULL,
+                path        TEXT NOT NULL,
+                sha256      TEXT NOT NULL,
+                size        INT NOT NULL DEFAULT 0,
+                language    TEXT,
+                summary     TEXT,
+                symbols     JSONB NOT NULL DEFAULT '[]',
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (project_key, path)
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS events (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                project_key TEXT NOT NULL,
+                actor       TEXT NOT NULL,
+                action      TEXT NOT NULL,
+                detail      TEXT NOT NULL DEFAULT '',
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """,
+        ]:
+            try:
+                await conn.execute(text(compat_sql.strip()))
+            except Exception as e:
+                log.warning("Synapse table create skipped: %s", e)
+
+        for compat_idx in [
+            "CREATE INDEX IF NOT EXISTS idx_projects_key ON projects(key)",
+            "CREATE INDEX IF NOT EXISTS idx_file_index_project ON file_index(project_key)",
+            "CREATE INDEX IF NOT EXISTS idx_file_index_lang ON file_index(language)",
+            "CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_key)",
+            "CREATE INDEX IF NOT EXISTS idx_events_time ON events(project_key, created_at DESC)",
+        ]:
+            try:
+                await conn.execute(text(compat_idx))
+            except Exception as e:
+                log.warning("Synapse index skip: %s", e)
+
+
+        # Backfill basic device metadata so the dashboard can place legacy agents.
+        try:
+            await conn.execute(text("""
+                UPDATE agents
+                SET metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:patch AS jsonb)
+                WHERE NOT (metadata ? 'device') AND name != 'global'
+            """), {"patch": '{"device": "' + socket.gethostname() + '", "source": "nexus-api"}'})
+        except Exception as e:
+            log.warning("Agent device metadata backfill skipped: %s", e)
+
+
+async def _ensure_global_agent():
+    """Ensure the 'global' shared pool agent exists."""
+    async with SessionLocal() as db:
+        try:
+            await db.execute(text("""
+                INSERT INTO agents (name, metadata)
+                VALUES ('global', '{"system": true, "description": "Shared global memory pool"}')
+                ON CONFLICT (name) DO NOTHING
+            """))
+            await db.commit()
+        except Exception as e:
+            log.warning("Global agent ensure failed: %s", e)
+
+
+async def _learning_loop(redis_client: aioredis.Redis, interval: int):
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await redis_client.rpush("nexus:consolidate", "1")
+        except Exception as e:
+            log.warning("Learning loop push failed: %s", e)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    log.info("Nexus starting — port %d", settings.nexus_port)
+
+    await _run_migrations()
+    await _ensure_global_agent()
+
+    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    app.state.redis = redis_client
+    app.state.settings = settings
+
+    task = asyncio.create_task(
+        _learning_loop(redis_client, settings.learning_interval)
+    )
+
+    log.info("Nexus ready — REST: /v1  MCP: /mcp  Dashboard: /")
+    yield
+
+    task.cancel()
+    await redis_client.aclose()
+    await engine.dispose()
+    log.info("Nexus stopped")
+
+
+app = FastAPI(
+    title="Nexus",
+    description="Unified agent memory — semantic · lexical · graph · temporal recall.",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+_cors_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()] if settings.cors_origins else []
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins or ["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+
+def _verify_key(request: Request):
+    secret = settings.nexus_secret
+    if not secret:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="NEXUS_SECRET not configured")
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Bearer token")
+    token = auth.removeprefix("Bearer ").strip()
+    if token == secret:
+        return
+    if _verify_dashboard_token(token):
+        return
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+
+
+app.include_router(memory_router,  prefix="/v1/memory",  tags=["memory"],  dependencies=[Depends(_verify_key)])
+app.include_router(agents_router,  prefix="/v1/agents",  tags=["agents"],  dependencies=[Depends(_verify_key)])
+app.include_router(search_router,  prefix="/v1/search",  tags=["search"],  dependencies=[Depends(_verify_key)])
+app.include_router(admin_router,   prefix="/v1",         tags=["admin"],   dependencies=[Depends(_verify_key)])
+app.include_router(browse_router,  prefix="/v1/browse",  tags=["browse"],  dependencies=[Depends(_verify_key)])
+app.include_router(stream_router,  prefix="/v1",         tags=["stream"])  # auth handled internally (EventSource can't set headers)
+app.include_router(mcp_router,        prefix="/mcp",           tags=["mcp"],        dependencies=[Depends(_verify_key)])
+app.include_router(sys_bridge_router,  prefix="/v1/sys",  tags=["sys"],  dependencies=[Depends(_verify_key)])
+app.include_router(synapse_router, prefix="/v1/synapse", tags=["synapse"], dependencies=[Depends(_verify_key)])
+
+
+@app.get("/.well-known/nexus/openapi.json", include_in_schema=False)
+async def nexus_openapi_spec():
+    return FileResponse("integrations/openapi/nexus-memory.openapi.json", media_type="application/json")
+
+
+@app.get("/.well-known/nexus/plugin-manifest.json", include_in_schema=False)
+async def nexus_plugin_manifest():
+    return FileResponse("integrations/plugins/universal-agent-plugin.manifest.json", media_type="application/json")
+
+
+@app.get("/health")
+async def health(request: Request):
+    from app.routers.admin import health as _h
+    async with SessionLocal() as db:
+        return await _h(request, db)
+
+
+_DASHBOARD_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nexus Command Deck</title>
+<style>
+:root{
+  --void:#02030a;--void2:#070916;--panel:rgba(9,16,34,.72);--panel2:rgba(4,10,24,.86);
+  --line:rgba(102,252,241,.22);--line2:rgba(139,92,246,.24);--cyan:#66fcf1;--cyan2:#21d4fd;
+  --violet:#b967ff;--magenta:#ff3cac;--amber:#ffd166;--green:#63ff9f;--red:#ff5470;
+  --text:#d9fbff;--muted:#6e8c9b;--dim:#395461;--glow:0 0 28px rgba(102,252,241,.22);
+}
+*{box-sizing:border-box} html,body{height:100%} body{margin:0;overflow:hidden;background:radial-gradient(circle at 18% 14%,rgba(33,212,253,.18),transparent 28%),radial-gradient(circle at 82% 8%,rgba(255,60,172,.13),transparent 30%),linear-gradient(135deg,#01020a 0%,#071024 52%,#02030a 100%);color:var(--text);font-family:"Rajdhani","Orbitron","Eurostile",ui-sans-serif,system-ui,sans-serif;letter-spacing:.01em}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;background:linear-gradient(rgba(102,252,241,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(102,252,241,.03) 1px,transparent 1px);background-size:42px 42px;mask-image:radial-gradient(circle at center,#000 0%,transparent 80%);animation:gridDrift 24s linear infinite}
+body:after{content:"";position:fixed;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(255,255,255,.025) 0,rgba(255,255,255,.025) 1px,transparent 1px,transparent 4px);mix-blend-mode:overlay;opacity:.25}
+@keyframes gridDrift{from{transform:translateY(0)}to{transform:translateY(42px)}}
+button,input,select,textarea{font:inherit}button{cursor:pointer}.app{height:100%;display:grid;grid-template-columns:280px 1fr;grid-template-rows:1fr 38px;padding:18px;gap:16px}.shell{position:relative;border:1px solid var(--line);background:linear-gradient(180deg,rgba(6,14,31,.9),rgba(2,5,15,.92));box-shadow:var(--glow),inset 0 0 50px rgba(102,252,241,.035);clip-path:polygon(0 18px,18px 0,100% 0,100% calc(100% - 18px),calc(100% - 18px) 100%,0 100%)}
+.rail{grid-row:1/3;padding:18px;display:flex;flex-direction:column;gap:16px}.brand{padding:18px 14px 22px;border-bottom:1px solid var(--line);position:relative}.brand .kicker{color:var(--cyan);font-size:.72rem;text-transform:uppercase;letter-spacing:.28em}.brand h1{margin:8px 0 0;font-size:2.4rem;line-height:.9;letter-spacing:.08em;text-shadow:0 0 18px rgba(102,252,241,.65)}.brand .sub{color:var(--muted);font-size:.82rem;margin-top:9px}.orb{position:absolute;right:14px;top:18px;width:54px;height:54px;border-radius:50%;border:1px solid var(--cyan);background:radial-gradient(circle,#66fcf1 0 3px,transparent 4px),conic-gradient(from 90deg,transparent,var(--cyan),transparent,var(--violet),transparent);box-shadow:0 0 24px rgba(102,252,241,.35);animation:spin 9s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.nav{display:flex;flex-direction:column;gap:8px}.nav button{background:rgba(102,252,241,.035);color:var(--muted);border:1px solid transparent;padding:13px 14px;text-align:left;text-transform:uppercase;letter-spacing:.14em;font-size:.78rem;display:flex;align-items:center;gap:11px;transition:.2s;clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,0 100%)}.nav button:hover{border-color:var(--line);color:var(--text);transform:translateX(4px)}.nav button.active{background:linear-gradient(90deg,rgba(102,252,241,.18),rgba(185,103,255,.05));border-color:rgba(102,252,241,.45);color:var(--cyan);box-shadow:inset 3px 0 0 var(--cyan),0 0 22px rgba(102,252,241,.12)}
+.sidePanel{border:1px solid var(--line2);background:rgba(3,8,20,.48);padding:12px;min-height:0;display:flex;flex-direction:column}.sideTitle{font-size:.72rem;color:var(--violet);text-transform:uppercase;letter-spacing:.2em;margin:0 0 10px}.agentList{overflow:auto;display:flex;flex-direction:column;gap:6px}.agent-item{border:1px solid rgba(102,252,241,.11);background:rgba(255,255,255,.025);padding:9px 10px;color:var(--muted);display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}.agent-item:hover,.agent-item.active{border-color:var(--cyan);color:var(--text);background:rgba(102,252,241,.08)}.agent-count{color:var(--cyan);font-variant-numeric:tabular-nums}.main{min-width:0;display:flex;flex-direction:column;padding:18px;gap:16px}.topbar{display:flex;align-items:center;gap:16px}.titleBlock{flex:1}.titleBlock .eyebrow{color:var(--cyan);letter-spacing:.22em;text-transform:uppercase;font-size:.72rem}.titleBlock h2{margin:4px 0 0;font-size:2rem;letter-spacing:.05em}.status{display:flex;gap:10px;align-items:center;border:1px solid var(--line);background:rgba(102,252,241,.06);padding:10px 12px;color:var(--cyan);text-transform:uppercase;font-size:.75rem;letter-spacing:.12em}.dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 18px var(--green);animation:pulse 1.6s ease-in-out infinite}@keyframes pulse{50%{opacity:.45;transform:scale(.75)}}
+.tabs{display:none;min-height:0;flex:1}.tabs.active{display:grid}.overview{grid-template-rows:auto 1fr;gap:16px}.statGrid{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:12px}.stat{position:relative;overflow:hidden;border:1px solid var(--line);background:linear-gradient(135deg,rgba(102,252,241,.1),rgba(185,103,255,.035));padding:16px;min-height:116px}.stat:before{content:"";position:absolute;right:-30px;top:-30px;width:90px;height:90px;border:1px solid rgba(102,252,241,.25);transform:rotate(45deg)}.stat .lbl{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.2em}.stat .val{font-size:2.4rem;color:var(--text);margin-top:12px;text-shadow:0 0 18px rgba(102,252,241,.35);font-variant-numeric:tabular-nums}.stat .sig{position:absolute;bottom:12px;right:14px;color:var(--dim);font-size:.7rem}.overviewGrid{display:grid;grid-template-columns:1.1fr .9fr;gap:16px;min-height:0}.panel{border:1px solid rgba(102,252,241,.2);background:var(--panel);padding:16px;min-height:0;overflow:hidden;position:relative}.panel h3{margin:0 0 12px;color:var(--cyan);letter-spacing:.16em;text-transform:uppercase;font-size:.82rem}.type-pills{display:flex;flex-wrap:wrap;gap:10px}.pill{border:1px solid rgba(102,252,241,.22);background:rgba(102,252,241,.045);padding:9px 12px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;font-size:.75rem}.pill.active,.pill:hover{color:var(--cyan);border-color:var(--cyan);box-shadow:0 0 18px rgba(102,252,241,.13)}.scanner{height:100%;min-height:220px;background:radial-gradient(circle at center,rgba(102,252,241,.14),transparent 55%);position:relative;overflow:hidden}.scanner:before{content:"";position:absolute;inset:18%;border:1px solid rgba(102,252,241,.28);border-radius:50%;box-shadow:0 0 35px rgba(102,252,241,.12),inset 0 0 35px rgba(102,252,241,.08)}.scanner:after{content:"";position:absolute;inset:0;background:conic-gradient(from 0deg,transparent 0 70%,rgba(102,252,241,.35));animation:spin 6s linear infinite}.scannerText{position:absolute;inset:auto 18px 18px;color:var(--muted);font-size:.78rem;letter-spacing:.12em;text-transform:uppercase}.vault{grid-template-rows:auto 1fr auto;gap:12px}.tools{display:grid;grid-template-columns:1fr 170px 140px;gap:10px}.field{background:rgba(2,5,14,.72);border:1px solid rgba(102,252,241,.22);color:var(--text);padding:12px 14px;outline:none}.field:focus{border-color:var(--cyan);box-shadow:0 0 18px rgba(102,252,241,.12)}.memories{overflow:auto;display:grid;gap:10px;padding-right:6px}.mem-card{position:relative;border:1px solid rgba(102,252,241,.17);background:linear-gradient(135deg,rgba(5,12,29,.86),rgba(8,5,22,.84));padding:14px 14px 12px;clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px));transition:.18s}.mem-card:hover{border-color:var(--cyan);transform:translateY(-1px);box-shadow:0 0 24px rgba(102,252,241,.13)}.mem-header{display:flex;gap:8px;align-items:center;margin-bottom:9px}.type-badge{border:1px solid currentColor;padding:3px 8px;font-size:.68rem;letter-spacing:.14em;text-transform:uppercase}.badge-world{color:var(--green)}.badge-experience{color:var(--cyan2)}.badge-observation{color:var(--violet)}.badge-preference{color:var(--amber)}.badge-lesson{color:var(--red)}.badge-other{color:var(--muted)}.mem-agent{color:var(--muted);font-size:.78rem;flex:1}.mem-date{color:var(--dim);font-size:.72rem}.mem-content{line-height:1.45;color:#d8f8ff;font-size:.94rem}.mem-footer{display:flex;align-items:center;gap:10px;margin-top:12px}.mem-meta{flex:1;color:var(--dim);font-size:.76rem}.imp-bar{display:inline-block;width:74px;height:5px;background:#08101e;margin-left:6px;vertical-align:middle;border:1px solid rgba(102,252,241,.14)}.imp-fill{display:block;height:100%;background:linear-gradient(90deg,var(--cyan),var(--violet))}.del-btn,.action{border:1px solid rgba(255,84,112,.4);background:rgba(255,84,112,.06);color:#ff8ca0;padding:7px 10px;text-transform:uppercase;letter-spacing:.1em;font-size:.7rem}.action{border-color:rgba(102,252,241,.35);background:rgba(102,252,241,.08);color:var(--cyan)}.action:hover,.del-btn:hover{filter:brightness(1.25);box-shadow:0 0 18px currentColor}.pagination{display:flex;justify-content:center;gap:10px;align-items:center}.page-btn{border:1px solid var(--line);background:rgba(102,252,241,.06);color:var(--cyan);padding:8px 14px}.page-btn:disabled{opacity:.35}.page-info{color:var(--muted);font-size:.8rem}.agentsTab{grid-template-columns:360px 1fr;gap:16px}.agentCards{overflow:auto;display:grid;gap:10px}.agentCard{border:1px solid rgba(185,103,255,.22);background:rgba(9,8,29,.76);padding:13px}.agentCard h4{margin:0;color:var(--text)}.agentMeta{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:10px;color:var(--muted);font-size:.78rem}.deviceChip{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(102,252,241,.28);background:rgba(102,252,241,.07);color:var(--cyan);padding:3px 7px;margin-top:7px;font-size:.68rem;text-transform:uppercase;letter-spacing:.1em}.deviceChip.unknown{color:var(--muted);border-color:rgba(110,140,155,.25);background:rgba(110,140,155,.05)}.console{grid-template-rows:auto 1fr;gap:12px}.consoleForm{display:grid;grid-template-columns:1fr 150px;gap:10px}.consoleOut{background:#02040b;border:1px solid rgba(102,252,241,.22);padding:14px;overflow:auto;color:#a7f7f1;font-family:"Share Tech Mono","Courier New",monospace;white-space:pre-wrap}.ticker{grid-column:2;border:1px solid var(--line2);background:rgba(3,6,18,.82);color:var(--muted);padding:9px 12px;overflow:hidden;font-size:.78rem}.ticker-event{color:var(--cyan);animation:slideIn .35s ease}@keyframes slideIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}.empty,.loading{color:var(--muted);text-align:center;padding:30px;border:1px dashed rgba(102,252,241,.18)}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:#02040b}::-webkit-scrollbar-thumb{background:linear-gradient(var(--cyan),var(--violet));border-radius:8px}@media(max-width:950px){body{overflow:auto}.app{height:auto;min-height:100%;grid-template-columns:1fr;grid-template-rows:auto 1fr auto}.rail{grid-row:auto}.ticker{grid-column:1}.statGrid,.overviewGrid,.agentsTab,.tools,.consoleForm{grid-template-columns:1fr}.tabs.active{display:block}.tabs>*{margin-bottom:12px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail shell">
+    <div class="brand"><div class="orb"></div><div class="kicker">Unified Memory Core</div><h1>NEXUS</h1><div class="sub">semantic · lexical · graph · temporal recall matrix</div></div>
+    <nav class="nav">
+      <button class="active" data-tab="overview" onclick="switchTab('overview')">◇ Overview</button>
+      <button data-tab="vault" onclick="switchTab('vault')">▣ Memory Vault</button>
+      <button data-tab="agents" onclick="switchTab('agents')">⌬ Agent Registry</button>
+      <button data-tab="console" onclick="switchTab('console')">⌁ Neural Console</button>
+    </nav>
+    <section class="sidePanel"><h3 class="sideTitle">Agent Channels</h3><div class="agentList" id="agent-list"></div></section>
+  </aside>
+
+  <main class="main shell">
+    <header class="topbar"><div class="titleBlock"><div class="eyebrow" id="tab-eyebrow">Command Overview</div><h2 id="tab-title">Memory Constellation</h2></div><div class="status"><span class="dot"></span><span id="live-count">connecting</span></div></header>
+
+    <section id="tab-overview" class="tabs overview active">
+      <div class="statGrid">
+        <div class="stat"><div class="lbl">Memories</div><div class="val" id="s-memories">…</div><div class="sig">MEM/IDX</div></div>
+        <div class="stat"><div class="lbl">Agents</div><div class="val" id="s-agents">…</div><div class="sig">NODE/LINK</div></div>
+        <div class="stat"><div class="lbl">Entities</div><div class="val" id="s-entities">…</div><div class="sig">GRAPH/ENT</div></div>
+        <div class="stat"><div class="lbl">Rules</div><div class="val" id="s-conclusions">…</div><div class="sig">REMEMBER</div></div>
+      </div>
+      <div class="overviewGrid">
+        <div class="panel"><h3>Memory Type Spectrum</h3><div class="type-pills" id="type-pills"></div></div>
+        <div class="panel scanner"><div class="scannerText">Live Memory Lattice · Awaiting Event Pulse</div></div>
+      </div>
+    </section>
+
+    <section id="tab-vault" class="tabs vault">
+      <div class="tools"><input class="field" type="text" id="search-input" placeholder="Search the memory lattice…"><select class="field" id="type-filter"><option value="">All types</option><option value="world">World</option><option value="experience">Experience</option><option value="observation">Observation</option><option value="preference">Preference</option><option value="lesson">Lesson</option></select><button class="action" onclick="loadMemories()">Scan</button></div>
+      <div class="memories" id="memories"></div>
+      <div class="pagination" id="pagination" style="display:none"><button class="page-btn" id="prev-btn" onclick="changePage(-1)" disabled>← Prev</button><span class="page-info" id="page-info"></span><button class="page-btn" id="next-btn" onclick="changePage(1)">Next →</button></div>
+    </section>
+
+    <section id="tab-agents" class="tabs agentsTab"><div class="panel"><h3>Selected Channel</h3><div id="agent-detail" class="consoleOut">Select an agent channel to inspect.</div></div><div class="agentCards" id="agent-cards"></div></section>
+
+    <section id="tab-console" class="tabs console"><div class="consoleForm"><input class="field" id="recall-query" placeholder="Ask Nexus recall…"><button class="action" onclick="runRecall()">Recall</button></div><pre class="consoleOut" id="console-output">NEXUS:// console online\nType a query and run recall.</pre></section>
+  </main>
+
+  <div class="ticker" id="ticker">⚡ Establishing live telemetry…</div>
+</div>
+
+<script>
+const TOKEN = "__NEXUS_TOKEN__";
+const LIMIT = 20;
+let state = { agent:null, type:"", query:"", offset:0, total:0, liveCount:0, agents:[] };
+const tabNames = {overview:["Command Overview","Memory Constellation"],vault:["Memory Vault","Recall Archive"],agents:["Agent Registry","Channel Topology"],console:["Neural Console","Direct Recall Interface"]};
+function apiFetch(path, opts={}){return fetch(path,{...opts,headers:{Authorization:"Bearer "+TOKEN,"Content-Type":"application/json",...(opts.headers||{})}}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json();});}
+function escHtml(s){return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
+function deviceLabel(a){return a?.device||a?.hostname||a?.source||"Unknown Device";}
+function deviceClass(a){return (a?.device||a?.hostname||a?.source)?"deviceChip":"deviceChip unknown";}
+function switchTab(tab){document.querySelectorAll('.tabs').forEach(e=>e.classList.remove('active'));document.getElementById('tab-'+tab).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.getElementById('tab-eyebrow').textContent=tabNames[tab][0];document.getElementById('tab-title').textContent=tabNames[tab][1];if(tab==='vault')loadMemories();if(tab==='agents')renderAgentCards();}
+function typeBadgeClass(t){return ({world:'badge-world',experience:'badge-experience',observation:'badge-observation',preference:'badge-preference',lesson:'badge-lesson'}[t]||'badge-other');}
+function fmtDate(dt){if(!dt)return'';const d=new Date(dt);return d.toLocaleDateString()+" "+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}
+function renderMemory(m){const imp=Math.round((m.importance||0)*100);return `<div class="mem-card" id="mc-${m.id}"><div class="mem-header"><span class="type-badge ${typeBadgeClass(m.memory_type)}">${escHtml(m.memory_type)}</span><span class="mem-agent">${escHtml(m.agent_name||m.agent_id||'?')}</span><span class="mem-date">${fmtDate(m.created_at)}</span></div><div class="mem-content">${escHtml(m.content)}</div><div class="mem-footer"><span class="mem-meta">importance ${imp}% <span class="imp-bar"><span class="imp-fill" style="width:${imp}%"></span></span> · accessed ${m.access_count||0}x ${m.confirmed_count?' · ✓ '+m.confirmed_count:''}${m.contradicted_count?' · ⚠ '+m.contradicted_count:''}</span><button class="del-btn" onclick="deleteMemory('${m.id}')">Delete</button></div></div>`;}
+async function loadMemories(){const el=document.getElementById('memories');el.innerHTML='<div class="loading">Scanning archive…</div>';const params=new URLSearchParams({limit:LIMIT,offset:state.offset});if(state.query)params.set('q',state.query);if(state.agent)params.set('agent',state.agent);if(state.type)params.set('type',state.type);try{const data=await apiFetch('/v1/browse/memories?'+params);state.total=data.total;if(!data.memories.length){el.innerHTML='<div class="empty">No memory signatures found.</div>';document.getElementById('pagination').style.display='none';return;}el.innerHTML=data.memories.map(renderMemory).join('');updatePagination();}catch(e){el.innerHTML='<div class="empty">Archive scan failed: '+escHtml(e.message)+'</div>';}}
+function updatePagination(){const pages=Math.ceil(state.total/LIMIT);const cur=Math.floor(state.offset/LIMIT)+1;const p=document.getElementById('pagination');if(pages<=1){p.style.display='none';return;}p.style.display='flex';document.getElementById('page-info').textContent=`Sector ${cur}/${pages} · ${state.total} records`;document.getElementById('prev-btn').disabled=state.offset===0;document.getElementById('next-btn').disabled=state.offset+LIMIT>=state.total;}
+function changePage(dir){state.offset=Math.max(0,state.offset+dir*LIMIT);loadMemories();}
+async function loadStats(){try{const d=await apiFetch('/v1/browse/stats');document.getElementById('s-memories').textContent=d.total_memories;document.getElementById('s-agents').textContent=d.total_agents;document.getElementById('s-entities').textContent=d.total_entities;document.getElementById('s-conclusions').textContent=d.total_conclusions;document.getElementById('type-pills').innerHTML=(d.by_type||[]).map(t=>`<span class="pill${state.type===t.memory_type?' active':''}" onclick="filterType('${t.memory_type}')">${escHtml(t.memory_type)} <b>${t.count}</b></span>`).join('');}catch(e){}}
+async function loadAgents(){try{const d=await apiFetch('/v1/browse/agents');state.agents=d.agents||[];const all=`<div class="agent-item${!state.agent?' active':''}" onclick="filterAgent(null)"><span>All channels</span><span class="agent-count">Σ</span></div>`;document.getElementById('agent-list').innerHTML=all+state.agents.map(a=>`<div class="agent-item${state.agent===a.name?' active':''}" onclick="filterAgent('${escHtml(a.name)}')"><span title="${escHtml(a.name)}"><span>${escHtml(a.name.length>18?a.name.slice(0,18)+'…':a.name)}</span><br><span class="${deviceClass(a)}">⌁ ${escHtml(deviceLabel(a))}</span></span><span class="agent-count">${a.memory_count}</span></div>`).join('');renderAgentCards();}catch(e){}}
+function renderAgentCards(){const el=document.getElementById('agent-cards');if(!el)return;el.innerHTML=(state.agents||[]).map(a=>`<article class="agentCard" onclick="showAgent('${escHtml(a.name)}')"><h4>${escHtml(a.name)}</h4><div class="${deviceClass(a)}">⌁ ${escHtml(deviceLabel(a))}</div><div class="agentMeta"><span>mem ${a.memory_count}</span><span>ent ${a.entity_count}</span><span>rules ${a.conclusion_count}</span><span>sessions ${a.session_count||0}</span><span>host ${escHtml(a.hostname||'unknown')}</span><span>source ${escHtml(a.source||'unknown')}</span><span>model ${escHtml(a.model||'unknown')}</span><span>${fmtDate(a.last_active)}</span></div></article>`).join('')||'<div class="empty">No agents registered.</div>';}
+function showAgent(name){const a=state.agents.find(x=>x.name===name);document.getElementById('agent-detail').textContent=a?`AGENT: ${a.name}
+DEVICE: ${deviceLabel(a)}
+HOST: ${a.hostname||'unknown'}
+SOURCE: ${a.source||'unknown'}
+MODEL: ${a.model||'unknown'}
+MEMORIES: ${a.memory_count}
+ENTITIES: ${a.entity_count}
+RULES: ${a.conclusion_count}
+LAST ACTIVE: ${fmtDate(a.last_active)}
+
+RAW:
+${JSON.stringify(a,null,2)}`:'No channel selected.';}
+function filterAgent(name){state.agent=name;state.offset=0;loadAgents();loadMemories();showAgent(name);switchTab('vault');}
+function filterType(type){state.type=state.type===type?'':type;document.getElementById('type-filter').value=state.type;state.offset=0;loadStats();loadMemories();switchTab('vault');}
+async function deleteMemory(id){if(!confirm('Purge this memory record?'))return;try{await apiFetch('/v1/browse/memories/'+id,{method:'DELETE'});document.getElementById('mc-'+id)?.remove();loadStats();loadAgents();}catch(e){alert('Delete failed: '+e.message);}}
+async function runRecall(){const q=document.getElementById('recall-query').value.trim();if(!q)return;const out=document.getElementById('console-output');out.textContent='NEXUS:// recalling…';try{const d=await apiFetch('/v1/memory/recall',{method:'POST',body:JSON.stringify({query:q,agent_id:state.agent,limit:8})});out.textContent='NEXUS:// recall complete\\nModes: '+d.modes_used.join(', ')+'\\n\\n'+d.results.map((m,i)=>`${i+1}. [${m.memory_type}] score=${Number(m.score||0).toFixed(3)}\\n${m.content}`).join('\\n\\n');}catch(e){out.textContent='NEXUS:// recall failed '+e.message;}}
+let searchTimer;document.getElementById('search-input').addEventListener('input',e=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{state.query=e.target.value.trim();state.offset=0;loadMemories();},300);});document.getElementById('type-filter').addEventListener('change',e=>{state.type=e.target.value;state.offset=0;loadStats();loadMemories();});
+function connectSSE(){const ticker=document.getElementById('ticker');const es=new EventSource('/v1/stream?'+new URLSearchParams({Authorization:'Bearer '+TOKEN}));es.addEventListener('connected',()=>{ticker.innerHTML='⚡ Live telemetry connected';document.getElementById('live-count').textContent='connected';});es.addEventListener('memory',e=>{const d=JSON.parse(e.data);state.liveCount++;document.getElementById('live-count').textContent=state.liveCount+' new';ticker.innerHTML=`<span class="ticker-event">⚡ [${escHtml(d.memory_type||'memory')}] <b>${escHtml(d.agent_name||'?')}:</b> ${escHtml((d.content||'').slice(0,140))}</span>`;if(state.offset===0&&!state.query&&!state.type&&!state.agent)loadMemories();loadStats();loadAgents();});es.onerror=()=>{ticker.innerHTML='⚡ telemetry interrupted — reconnecting…';document.getElementById('live-count').textContent='reconnecting';es.close();setTimeout(connectSSE,5000);};}
+function loadAll(){loadStats();loadAgents();loadMemories();}
+loadAll();connectSSE();setInterval(loadAll,30000);
+</script>
+</body>
+</html>
+"""
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def dashboard(request: Request):
+    _verify_key(request)
+    dashboard_token = _make_dashboard_token()
+    html = _DASHBOARD_HTML.replace("__NEXUS_TOKEN__", dashboard_token)
+    return HTMLResponse(content=html)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app.main:app", host="0.0.0.0", port=settings.nexus_port, reload=False)

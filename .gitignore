@@ -4,38 +4,55 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
-dist/
-build/
 
-# Node
-node_modules/
-package-lock.json
-*.vsix
-
-# TypeScript
-*.js.map
+# Virtual environments
+.env
+*.env.local
 
 # IDE
-.idea/
 .vscode/
-.vscode-test/
+.idea/
+*.swp
+*.swo
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Secrets
-.env
-*.key
-*.pem
+# Build
+dist/
+build/
+node_modules/
+*.tsbuildinfo
 
-# Local data
+# Docker volumes
+postgres-data/
+redis-data/
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
 *.sqlite
-*.sqlite-wal
-*.sqlite-shm
+*.sqlite3
 
-# Service files (user-specific)
-systemd/*.service
+# Agent/IDE specific
+.agent/
+.agents/
+.brainsync/
+.cursor/
+.cursorrules
+.windsurfrules
+.kilocode/
+.mcp.json
+AGENT.md
+CLAUDE.md
+.agent-mem/
+.agent-*
 
-# SDK build artifacts
-sdk/typescript/dist/
+# Environment specific
+BUILD_CONFIG_NOTES.txt
+MANUAL_STEPS.txt
+SETUP_GUIDE.md

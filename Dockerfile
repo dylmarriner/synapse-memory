@@ -1,0 +1,28 @@
+FROM python:3.11.13-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -u 1001 -s /sbin/nologin nexus
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+RUN chown -R nexus:nexus /app
+
+USER nexus
+
+EXPOSE 7777
+
+HEALTHCHECK --interval=10s --timeout=5s --retries=5 \
+    CMD curl -sf http://localhost:7777/health || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7777"]

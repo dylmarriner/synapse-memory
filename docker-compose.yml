@@ -1,0 +1,133 @@
+name: nexus
+
+# Agent Memory Nexus — unified shared memory for all AI agents.
+# Accessible from all devices via Tailscale: http://100.93.75.87:7777
+#
+# Quick start:
+#   cp .env.example .env    # fill in API keys
+#   docker compose up -d
+#   curl http://100.93.75.87:7777/health
+
+services:
+
+  # ── Data layer ───────────────────────────────────────────────────────────
+
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg17
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexuspassword}
+      POSTGRES_DB: nexus
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    ports:
+      - "127.0.0.1:5435:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.2.2-alpine
+    ports:
+      - "127.0.0.1:6381:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Application layer ────────────────────────────────────────────────────
+
+  nexus-api:
+    build: .
+    volumes:
+      - .:/app:ro
+    ports:
+      - "0.0.0.0:${NEXUS_PORT:-7777}:7777"
+    environment:
+      NEXUS_SECRET: ${NEXUS_SECRET}
+      DATABASE_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD:-nexuspassword}@postgres:5432/nexus
+      REDIS_URL: redis://redis:6379/0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_DIMS: ${EMBEDDING_DIMS:-384}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
+      LEARNING_INTERVAL: ${LEARNING_INTERVAL:-300}
+      NEXUS_BRIDGE_URL: http://nexus-bridge:7778
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nexus-bridge:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:7777/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
+  nexus-bridge:
+    image: node:22-alpine
+    command: node /app/scripts/sys-bridge.mjs
+    volumes:
+      - .:/app:ro
+      - ${BSYNC_CORE_DIR:-${HOME}/.bsync_core}:/root/.nexus_core:ro
+      - ${WINDSURF_EXT_DIR:-${HOME}/.windsurf/extensions}:/root/.windsurf/extensions:ro
+    environment:
+      BRIDGE_PORT: "7778"
+      NEXUS_CORE_DIR: /root/.nexus_core
+      NEXUS_EXT_JS: ${NEXUS_EXT_JS:-}
+    ports:
+      - "127.0.0.1:7778:7778"
+    healthcheck:
+      test: ["CMD", "node", "-e", "http.get('http://localhost:7778/health',r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>process.exit(d.includes('ok')?0:1))}).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  nexus-worker:
+    build: .
+    volumes:
+      - .:/app:ro
+    command: python -m app.worker
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/nexus-worker-heartbeat && test -n \"$(find /tmp/nexus-worker-heartbeat -mmin -1 2>/dev/null)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    environment:
+      DATABASE_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD:-nexuspassword}@postgres:5432/nexus
+      REDIS_URL: redis://redis:6379/0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_DIMS: ${EMBEDDING_DIMS:-384}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:

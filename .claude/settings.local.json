@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tailscale status *)",
+      "Bash(curl -sf http://100.93.75.87:7777/health)",
+      "Bash(ssh *)",
+      "Bash(ssh-keyscan -H 100.75.23.127)",
+      "Bash(node *)"
+    ]
+  }
+}

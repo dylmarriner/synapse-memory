@@ -1,0 +1,33 @@
+{
+  "id": "nexus-universal-memory",
+  "name": "Nexus Universal Memory",
+  "version": "1.0.0",
+  "description": "Universal memory connector for AI agents supporting MCP, OpenAPI, REST, plugins, and skills.",
+  "protocols": ["mcp-stdio", "mcp-http", "openapi", "rest", "sse"],
+  "endpoints": {
+    "dashboard": "http://100.93.75.87:7777/",
+    "health": "http://100.93.75.87:7777/health",
+    "mcpHttp": "http://100.93.75.87:7777/mcp",
+    "mcpSse": "http://100.93.75.87:7777/mcp/sse",
+    "openapi": "http://100.93.75.87:7777/.well-known/nexus/openapi.json",
+    "restBase": "http://100.93.75.87:7777/v1"
+  },
+  "auth": {
+    "type": "bearer",
+    "env": "NEXUS_SECRET"
+  },
+  "tools": [
+    "memory_save",
+    "memory_recall",
+    "memory_reflect",
+    "agent_context",
+    "agent_learn",
+    "nexus_status",
+    "memory_save_lesson",
+    "memory_save_global",
+    "memory_note_to_agent",
+    "memory_synthesize",
+    "agent_represent"
+  ],
+  "metadataFields": ["device", "hostname", "source", "model", "workspace", "capabilities"]
+}

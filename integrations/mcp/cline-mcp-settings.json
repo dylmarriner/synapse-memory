@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "nexus-memory": {
+      "command": "python3",
+      "args": ["/media/kubuntux/DEVELOPMENT1/shared-memory/nexus/scripts/adapters/nexus_mcp_stdio.py"],
+      "env": {
+        "NEXUS_URL": "http://100.93.75.87:7777",
+        "NEXUS_SECRET": "${NEXUS_SECRET}",
+        "NEXUS_AGENT_ID": "cline"
+      },
+      "disabled": false,
+      "autoApprove": ["nexus_status", "memory_recall", "agent_context"]
+    }
+  }
+}

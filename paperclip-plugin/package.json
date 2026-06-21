@@ -1,0 +1,33 @@
+{
+  "name": "@local/paperclip-plugin-nexus-memory",
+  "version": "1.0.0",
+  "description": "Paperclip AI plugin that connects agents to Nexus unified memory",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "paperclipPlugin": {
+    "manifest": "./dist/src/manifest.js",
+    "worker": "./dist/src/worker.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@paperclipai/plugin-sdk": "*",
+    "@paperclipai/shared": "*",
+    "zod": "3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.4"
+  },
+  "overrides": {
+    "zod": "3.24.2"
+  }
+}

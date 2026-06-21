@@ -1,0 +1,32 @@
+{
+  "id": "nexus",
+  "activation": { "onStartup": true },
+  "name": "Nexus Memory",
+  "description": "Unified AI memory — semantic · lexical · graph · temporal recall. Shared across all agents and devices via Tailscale.",
+  "contracts": {
+    "tools": ["nexus_save", "nexus_recall", "nexus_context", "nexus_reflect", "nexus_status"]
+  },
+  "toolMetadata": {
+    "nexus_save":    { "optional": false },
+    "nexus_recall":  { "optional": false },
+    "nexus_context": { "optional": false },
+    "nexus_reflect": { "optional": true },
+    "nexus_status":  { "optional": true }
+  },
+  "skills": ["./skills"],
+  "uiHints": {
+    "serverUrl": { "label": "Nexus Server URL", "help": "MCP endpoint (e.g. http://100.93.75.87:7777/mcp)" },
+    "secret":    { "label": "Bearer Token",     "help": "NEXUS_SECRET from the Nexus .env file" },
+    "agentId":   { "label": "Agent ID",         "help": "Identifier for this OpenClaw instance" }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "serverUrl": { "type": "string", "format": "uri", "default": "http://100.93.75.87:7777/mcp" },
+      "secret":    { "type": "string", "default": "" },
+      "agentId":   { "type": "string", "default": "openclaw" },
+      "maxResults": { "type": "number", "minimum": 1, "maximum": 100, "default": 10 }
+    }
+  }
+}

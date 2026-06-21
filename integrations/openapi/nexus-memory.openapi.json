@@ -1,0 +1,85 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Nexus Universal Agent Memory API",
+    "version": "1.0.0",
+    "description": "Universal long-term memory for AI agents. Supports save, batch save, recall, reflection, context, agent registry, transfer, export, and health. Authenticate with Authorization: Bearer <NEXUS_SECRET>."
+  },
+  "servers": [
+    { "url": "http://100.93.75.87:7777", "description": "Tailscale Nexus" },
+    { "url": "http://127.0.0.1:7777", "description": "Local Nexus" }
+  ],
+  "security": [{ "bearerAuth": [] }],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer" }
+    },
+    "schemas": {
+      "MemorySaveRequest": {
+        "type": "object",
+        "required": ["content"],
+        "properties": {
+          "content": { "type": "string" },
+          "agent_id": { "type": "string", "default": "default" },
+          "memory_type": { "type": ["string", "null"], "enum": ["world", "experience", "observation", "preference", "lesson", null] },
+          "importance": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
+          "metadata": { "type": "object", "additionalProperties": true },
+          "tags": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "MemoryRecallRequest": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": { "type": "string" },
+          "agent_id": { "type": ["string", "null"] },
+          "memory_types": { "type": "array", "items": { "type": "string" } },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 10 },
+          "search_modes": { "type": "array", "items": { "type": "string", "enum": ["vector", "lexical", "graph", "temporal"] } }
+        }
+      },
+      "MemoryReflectRequest": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": { "type": "string" },
+          "agent_id": { "type": ["string", "null"] },
+          "context": { "type": ["string", "null"] },
+          "depth": { "type": "string", "default": "mid" }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": { "operationId": "nexusStatus", "summary": "Check Nexus health", "security": [], "responses": { "200": { "description": "Health status" } } }
+    },
+    "/v1/memory/save": {
+      "post": { "operationId": "memorySave", "summary": "Save one memory", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MemorySaveRequest" } } } }, "responses": { "200": { "description": "Saved memory" } } }
+    },
+    "/v1/memory/batch": {
+      "post": { "operationId": "memoryBatchSave", "summary": "Save multiple memories", "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["memories"], "properties": { "memories": { "type": "array", "items": { "$ref": "#/components/schemas/MemorySaveRequest" } } } } } } }, "responses": { "200": { "description": "Batch save result" } } }
+    },
+    "/v1/memory/recall": {
+      "post": { "operationId": "memoryRecall", "summary": "Recall relevant memories", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MemoryRecallRequest" } } } }, "responses": { "200": { "description": "Recall results" } } }
+    },
+    "/v1/memory/reflect": {
+      "post": { "operationId": "memoryReflect", "summary": "Synthesize memories into reflection", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MemoryReflectRequest" } } } }, "responses": { "200": { "description": "Reflection" } } }
+    },
+    "/v1/agents/{agent_id}/context": {
+      "get": { "operationId": "agentContext", "summary": "Get token-budgeted agent context", "parameters": [{ "name": "agent_id", "in": "path", "required": true, "schema": { "type": "string" } }, { "name": "tokens", "in": "query", "schema": { "type": "integer", "default": 2000 } }], "responses": { "200": { "description": "Agent context" } } }
+    },
+    "/v1/agents/{agent_id}/learn": {
+      "post": { "operationId": "agentLearn", "summary": "Teach one agent", "parameters": [{ "name": "agent_id", "in": "path", "required": true, "schema": { "type": "string" } }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MemorySaveRequest" } } } }, "responses": { "200": { "description": "Learn result" } } }
+    },
+    "/v1/agents/{from_agent}/transfer/{to_agent}": {
+      "post": { "operationId": "agentTransfer", "summary": "Transfer knowledge between agents", "parameters": [{ "name": "from_agent", "in": "path", "required": true, "schema": { "type": "string" } }, { "name": "to_agent", "in": "path", "required": true, "schema": { "type": "string" } }, { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 10 } }], "responses": { "200": { "description": "Transfer result" } } }
+    },
+    "/v1/browse/agents": {
+      "get": { "operationId": "agentRegistry", "summary": "List agents, devices, models, and activity", "responses": { "200": { "description": "Agents" } } }
+    },
+    "/v1/admin/export/{agent_id}": {
+      "get": { "operationId": "memoryExportAgent", "summary": "Export one agent memory as JSONL", "parameters": [{ "name": "agent_id", "in": "path", "required": true, "schema": { "type": "string" } }], "responses": { "200": { "description": "JSONL export" } } }
+    }
+  }
+}

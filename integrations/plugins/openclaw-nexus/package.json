@@ -1,0 +1,25 @@
+{
+  "name": "@nexus/openclaw-plugin",
+  "version": "1.0.0",
+  "description": "OpenClaw plugin for Nexus unified AI memory",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "typebox": "^1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "typescript": "^5.0.0"
+  },
+  "openclaw": {
+    "extensions": ["./src/index.ts"],
+    "install": {
+      "localPath": "integrations/plugins/openclaw-nexus",
+      "minHostVersion": ">=2026.4.30"
+    },
+    "compat": { "pluginApi": ">=2026.5.22" }
+  }
+}

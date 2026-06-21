@@ -1,0 +1,13 @@
+{
+  "mcp": {
+    "nexus-memory": {
+      "type": "local",
+      "command": ["python3", "/media/kubuntux/DEVELOPMENT1/shared-memory/nexus/scripts/adapters/nexus_mcp_stdio.py"],
+      "environment": {
+        "NEXUS_URL": "http://100.93.75.87:7777",
+        "NEXUS_SECRET": "${NEXUS_SECRET}",
+        "NEXUS_AGENT_ID": "opencode"
+      }
+    }
+  }
+}
