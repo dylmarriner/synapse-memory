@@ -162,3 +162,110 @@ class AgentTransferResponse(BaseModel):
     to_agent: str
     transferred: int
     memory_ids: List[str] = Field(default_factory=list)
+
+
+# ── RTK integration models ───────────────────────────────────────────────────
+
+class RtkCommandEventRequest(BaseModel):
+    agent_id: str = "default"
+    command: str = Field(min_length=1, max_length=2000)
+    exit_code: int = 0
+    duration_ms: Optional[int] = Field(default=None, ge=0)
+    cwd: Optional[str] = Field(default=None, max_length=2000)
+    output_chars: int = Field(default=0, ge=0)
+    filtered_chars: int = Field(default=0, ge=0)
+    tokens_saved_estimate: int = Field(default=0, ge=0)
+    summary: Optional[str] = Field(default=None, max_length=4000)
+    durable: bool = False
+    memory_type: Optional[MemoryType] = None
+    importance: float = Field(default=0.5, ge=0.0, le=1.0)
+    tags: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RtkCommandEventResponse(BaseModel):
+    recorded: bool
+    event_id: Optional[str] = None
+    memory_id: Optional[str] = None
+    saved_memory: bool = False
+
+
+# ── Session archive models ────────────────────────────────────────────────────
+
+class SessionStartRequest(BaseModel):
+    agent_id: str = "default"
+    project_key: Optional[str] = None
+    title: Optional[str] = Field(default=None, max_length=500)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionStartResponse(BaseModel):
+    session_id: str
+    agent_id: str
+    started_at: datetime
+
+
+class SessionAppendRequest(BaseModel):
+    role: str = Field(default="event", max_length=50)
+    content: str = Field(min_length=1, max_length=200_000)
+    token_estimate: Optional[int] = Field(default=None, ge=0)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionAppendResponse(BaseModel):
+    message_id: str
+    session_id: str
+    token_estimate: int
+
+
+class SessionEndRequest(BaseModel):
+    summary: Optional[str] = Field(default=None, max_length=50_000)
+    durable: bool = False
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionEndResponse(BaseModel):
+    session_id: str
+    ended: bool
+    memory_id: Optional[str] = None
+
+
+class SessionListItem(BaseModel):
+    id: str
+    agent_id: str
+    project_key: Optional[str] = None
+    title: Optional[str] = None
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    message_count: int = 0
+
+
+class SessionMessageItem(BaseModel):
+    id: str
+    role: str
+    content: str
+    token_estimate: int = 0
+    created_at: datetime
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionDetailResponse(BaseModel):
+    id: str
+    agent_id: str
+    project_key: Optional[str] = None
+    title: Optional[str] = None
+    started_at: datetime
+    ended_at: Optional[datetime] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    messages: List[SessionMessageItem] = Field(default_factory=list)
+
+
+class MemorySourceLinkRequest(BaseModel):
+    memory_id: str
+    source_kind: str = Field(default="message", max_length=50)
+    source_id: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MemorySourceLinkResponse(BaseModel):
+    linked: bool

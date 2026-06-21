@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Run a command through RTK and report compact telemetry to Nexus.
+
+Usage:
+  nexus-rtk git status
+  nexus-rtk pytest
+  NEXUS_RTK_DURABLE=1 NEXUS_RTK_SUMMARY="pytest failed because migrations are missing" nexus-rtk pytest
+
+This wrapper intentionally does not send raw command output to Nexus by default.
+It prints RTK-filtered output to stdout/stderr for the agent and posts metadata to
+/v1/rtk/events.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import urllib.request
+import urllib.error
+
+
+def _estimate_tokens(chars: int) -> int:
+    return max(0, chars // 4)
+
+
+def _post_event(payload: dict) -> None:
+    url = os.getenv("NEXUS_URL", "http://localhost:7777").rstrip("/") + "/v1/rtk/events"
+    secret = os.getenv("NEXUS_SECRET", "")
+    if not secret:
+        return
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {secret}"},
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(req, timeout=3).read()
+    except Exception:
+        # Never break the user's command because telemetry failed.
+        pass
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("Usage: nexus-rtk <command> [args...]", file=sys.stderr)
+        return 2
+    if shutil.which("rtk") is None:
+        print("nexus-rtk: rtk not found on PATH", file=sys.stderr)
+        return 127
+
+    cmd = sys.argv[1:]
+    started = time.time()
+    proc = subprocess.run(["rtk", *cmd], text=True, capture_output=True)
+    duration_ms = int((time.time() - started) * 1000)
+
+    if proc.stdout:
+        print(proc.stdout, end="")
+    if proc.stderr:
+        print(proc.stderr, end="", file=sys.stderr)
+
+    filtered_chars = len(proc.stdout) + len(proc.stderr)
+    # We do not know raw pre-filter chars from outside RTK. Keep this conservative;
+    # RTK's own `rtk gain` remains the source of truth for actual savings.
+    tokens_saved = int(os.getenv("NEXUS_RTK_TOKENS_SAVED", "0") or "0")
+    summary = os.getenv("NEXUS_RTK_SUMMARY", "").strip() or None
+    durable = os.getenv("NEXUS_RTK_DURABLE", "0").lower() in {"1", "true", "yes"}
+    if durable and summary is None and proc.returncode != 0:
+        summary = f"RTK-wrapped command failed: {' '.join(cmd[:3])} exited {proc.returncode}."
+
+    _post_event({
+        "agent_id": os.getenv("NEXUS_AGENT_ID", "rtk-agent"),
+        "command": " ".join(cmd),
+        "exit_code": proc.returncode,
+        "duration_ms": duration_ms,
+        "cwd": os.getcwd(),
+        "output_chars": 0,
+        "filtered_chars": filtered_chars,
+        "tokens_saved_estimate": tokens_saved or _estimate_tokens(0),
+        "summary": summary,
+        "durable": durable,
+        "importance": float(os.getenv("NEXUS_RTK_IMPORTANCE", "0.55")),
+        "tags": ["rtk", "command"],
+        "metadata": {"wrapper": "nexus-rtk"},
+    })
+    return proc.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

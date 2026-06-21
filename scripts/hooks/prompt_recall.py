@@ -6,6 +6,11 @@ import os
 import sys
 import urllib.request
 
+try:
+    from nexus_hook_utils import append_session
+except Exception:
+    def append_session(*args, **kwargs): return None
+
 NEXUS_URL = os.getenv("NEXUS_URL", "http://localhost:7777")
 NEXUS_TOKEN = os.getenv("NEXUS_SECRET", "")
 AGENT_ID = os.getenv("NEXUS_AGENT_ID", "claude-code")
@@ -32,6 +37,8 @@ try:
             }
         }))
         sys.exit(0)
+
+    append_session("user", user_prompt, {"hook": "UserPromptSubmit"})
 
     payload = json.dumps({
         "query": user_prompt[:500],

@@ -39,7 +39,9 @@ def is_trivial_query(query: str) -> bool:
 async def expand_query(query: str) -> str:
     """Expand a query with synonyms and related concepts via LLM.
     Returns the original query augmented with expansion terms."""
-    if len(query.strip()) < 15:
+    if not settings.llm_query_expansion:
+        return query
+    if len(query.strip()) < settings.llm_query_expansion_min_chars:
         return query
 
     llm = get_llm_client()
@@ -49,8 +51,8 @@ async def expand_query(query: str) -> str:
     try:
         resp = await llm.chat.completions.create(
             model=settings.llm_model,
-            messages=[{"role": "user", "content": _EXPAND_PROMPT.format(query=query[:300])}],
-            max_tokens=80,
+                messages=[{"role": "user", "content": _EXPAND_PROMPT.format(query=query[:200])}],
+                max_tokens=50,
             temperature=0.3,
         )
         expansions = (resp.choices[0].message.content or "").strip()

@@ -17,11 +17,15 @@ class Agent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     representation: Mapped[str | None] = mapped_column(Text)
     represented_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_active: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    session_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    model: Mapped[str | None] = mapped_column(String(100))
 
     memories: Mapped[list["Memory"]] = relationship("Memory", back_populates="agent", cascade="all, delete-orphan")
     entities: Mapped[list["Entity"]] = relationship("Entity", back_populates="agent", cascade="all, delete-orphan")
     conclusions: Mapped[list["Conclusion"]] = relationship("Conclusion", back_populates="agent", cascade="all, delete-orphan")
     summaries: Mapped[list["Summary"]] = relationship("Summary", back_populates="agent", cascade="all, delete-orphan")
+    sessions: Mapped[list["Session"]] = relationship("Session", back_populates="agent", cascade="all, delete-orphan")
 
 
 class Memory(Base):
@@ -94,6 +98,53 @@ class Summary(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     agent: Mapped["Agent"] = relationship("Agent", back_populates="summaries")
+
+
+# ── Raw session/event archive ─────────────────────────────────────────────────
+
+class Session(Base):
+    """Append-only agent work session for raw conversation/event preservation."""
+    __tablename__ = "sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    agent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"))
+    agent_name: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    project_key: Mapped[str | None] = mapped_column(String, index=True)
+    title: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+
+    agent: Mapped["Agent | None"] = relationship("Agent", back_populates="sessions")
+    messages: Mapped[list["Message"]] = relationship("Message", back_populates="session", cascade="all, delete-orphan")
+
+
+class Message(Base):
+    """Raw session message/event payload."""
+    __tablename__ = "messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(50), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    token_estimate: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+
+    session: Mapped["Session"] = relationship("Session", back_populates="messages")
+
+
+class MemorySource(Base):
+    """Provenance link from distilled memory back to raw source material."""
+    __tablename__ = "memory_sources"
+    __table_args__ = (UniqueConstraint("memory_id", "source_kind", "source_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    memory_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("memories.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_kind: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
 
 
 # ── Synapse-compat tables ────────────────────────────────────────────────────

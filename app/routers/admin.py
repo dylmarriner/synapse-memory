@@ -42,6 +42,103 @@ async def trigger_consolidate(db: AsyncSession = Depends(get_db)):
     return {"success": True, "stats": stats}
 
 
+@router.get("/admin/rtk")
+async def rtk_metrics(db: AsyncSession = Depends(get_db)):
+    """Return RTK command telemetry for dashboards and operations views."""
+    try:
+        total = (await db.execute(text("""
+            SELECT COUNT(*) FROM events WHERE action = 'rtk.command'
+        """))).scalar() or 0
+
+        recent_24h = (await db.execute(text("""
+            SELECT COUNT(*) FROM events
+            WHERE action = 'rtk.command' AND created_at > NOW() - INTERVAL '24 hours'
+        """))).scalar() or 0
+
+        failed_24h = (await db.execute(text("""
+            SELECT COUNT(*) FROM events
+            WHERE action = 'rtk.command'
+              AND created_at > NOW() - INTERVAL '24 hours'
+              AND COALESCE((detail::jsonb->>'exit_code')::int, 0) != 0
+        """))).scalar() or 0
+
+        saved_tokens = (await db.execute(text("""
+            SELECT COALESCE(SUM(COALESCE((detail::jsonb->>'tokens_saved_estimate')::int, 0)), 0)
+            FROM events WHERE action = 'rtk.command'
+        """))).scalar() or 0
+
+        durable_memories = (await db.execute(text("""
+            SELECT COUNT(*) FROM memories
+            WHERE metadata->>'source' = 'rtk'
+        """))).scalar() or 0
+
+        by_agent_rows = await db.execute(text("""
+            SELECT actor AS agent_id, COUNT(*) AS count
+            FROM events
+            WHERE action = 'rtk.command'
+            GROUP BY actor
+            ORDER BY count DESC
+            LIMIT 10
+        """))
+
+        command_rows = await db.execute(text("""
+            SELECT detail::jsonb->>'command_label' AS command_label, COUNT(*) AS count
+            FROM events
+            WHERE action = 'rtk.command'
+            GROUP BY command_label
+            ORDER BY count DESC
+            LIMIT 10
+        """))
+
+        recent_rows = await db.execute(text("""
+            SELECT id, actor, created_at, detail
+            FROM events
+            WHERE action = 'rtk.command'
+            ORDER BY created_at DESC
+            LIMIT 20
+        """))
+
+        recent = []
+        for row in recent_rows.fetchall():
+            try:
+                detail = json.loads(row.detail) if isinstance(row.detail, str) else row.detail
+            except Exception:
+                detail = {"raw": row.detail}
+            recent.append({
+                "id": str(row.id),
+                "agent_id": row.actor,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "command_label": detail.get("command_label"),
+                "exit_code": detail.get("exit_code"),
+                "duration_ms": detail.get("duration_ms"),
+                "tokens_saved_estimate": detail.get("tokens_saved_estimate", 0),
+                "durable": bool(detail.get("durable")),
+            })
+
+        return {
+            "total_events": total,
+            "recent_24h": recent_24h,
+            "failed_24h": failed_24h,
+            "tokens_saved_estimate": int(saved_tokens),
+            "durable_memories": durable_memories,
+            "by_agent": [{"agent_id": r.agent_id, "count": r.count} for r in by_agent_rows.fetchall()],
+            "top_commands": [{"command_label": r.command_label or "unknown", "count": r.count} for r in command_rows.fetchall()],
+            "recent": recent,
+        }
+    except Exception as e:
+        return {
+            "total_events": 0,
+            "recent_24h": 0,
+            "failed_24h": 0,
+            "tokens_saved_estimate": 0,
+            "durable_memories": 0,
+            "by_agent": [],
+            "top_commands": [],
+            "recent": [],
+            "error": str(e),
+        }
+
+
 async def _memory_jsonl(db: AsyncSession, agent_id: str | None = None):
     where = ""
     params = {}
@@ -101,5 +198,23 @@ async def export_all(db: AsyncSession = Depends(get_db)):
 @router.get("/admin/export/{agent_id}")
 async def export_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
     return StreamingResponse(_memory_jsonl(db, agent_id), media_type="application/x-ndjson")
+
+
+@router.post("/admin/scheduled-consolidation")
+async def trigger_scheduled_consolidation():
+    """Manually trigger the scheduled daily consolidation."""
+    from app.scheduler import run_scheduled_consolidation
+    result = await run_scheduled_consolidation()
+    return result
+
+
+@router.get("/admin/consolidation-report")
+async def get_consolidation_report():
+    """Get the most recent consolidation report."""
+    from app.scheduler import get_latest_report
+    report = await get_latest_report()
+    if report:
+        return report
+    return {"message": "No consolidation report available yet"}
 
 

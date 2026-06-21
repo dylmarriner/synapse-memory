@@ -1,0 +1,6 @@
+name: nexus
+version: 1.0.0
+description: "Nexus unified agent memory — 4-way recall (vector+lexical+graph+temporal), lessons, entity extraction, rolling summaries, optimized for token efficiency."
+pip_dependencies: []
+hooks:
+  - on_session_end

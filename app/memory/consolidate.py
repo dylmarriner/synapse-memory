@@ -14,15 +14,37 @@ SIMILARITY_THRESHOLD = 0.92
 
 async def consolidate(db: AsyncSession) -> Dict[str, int]:
     """
-    Four-pass consolidation:
-    1. Boost importance of frequently accessed memories
-    2. Decay importance of memories not accessed in 30+ days
-    3. Remove exact content duplicates (keep newest per agent)
-    4. Semantic deduplication via embedding cosine similarity
+    Five-pass consolidation:
+    1. Smart importance auto-scaling - boost memories recalled multiple times in conversation
+    2. Boost importance of frequently accessed memories
+    3. Decay importance of memories not accessed in 30+ days
+    4. Remove exact content duplicates (keep newest per agent)
+    5. Semantic deduplication via embedding cosine similarity
     """
-    stats: Dict[str, int] = {"boosted": 0, "decayed": 0, "deduplicated": 0, "semantic_deduped": 0}
+    stats: Dict[str, int] = {"context_boosted": 0, "boosted": 0, "decayed": 0, "deduplicated": 0, "semantic_deduped": 0}
 
-    # Pass 1: Boost memories accessed frequently (access_count > 5)
+    # Pass 1: Smart importance auto-scaling - boost memories recalled frequently in recent context
+    try:
+        # If a memory was accessed 3+ times in the last hour, it's part of active conversation
+        recent_cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+        r = await db.execute(text("""
+            UPDATE memories
+            SET importance = LEAST(1.0, importance + 0.15),
+                accessed_at = NOW()
+            WHERE access_count >= 3
+              AND accessed_at > :recent_cutoff
+              AND importance < 0.95
+              AND memory_type != 'lesson'
+            RETURNING id
+        """), {"recent_cutoff": recent_cutoff})
+        stats["context_boosted"] = len(r.fetchall())
+        await db.commit()
+        if stats["context_boosted"] > 0:
+            log.info("Smart importance scaling: boosted %d active conversation memories", stats["context_boosted"])
+    except Exception as e:
+        log.warning("Context boost pass failed: %s", e)
+
+    # Pass 2: Boost memories accessed frequently (access_count > 5)
     try:
         r = await db.execute(text("""
             UPDATE memories
@@ -35,7 +57,7 @@ async def consolidate(db: AsyncSession) -> Dict[str, int]:
     except Exception as e:
         log.warning("Boost pass failed: %s", e)
 
-    # Pass 2: Decay stale memories
+    # Pass 3: Decay stale memories
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     try:
         r = await db.execute(
@@ -52,7 +74,7 @@ async def consolidate(db: AsyncSession) -> Dict[str, int]:
     except Exception as e:
         log.warning("Decay pass failed: %s", e)
 
-    # Pass 3: Exact content deduplication
+    # Pass 4: Exact content deduplication
     try:
         r = await db.execute(text("""
             WITH ranked AS (
@@ -72,7 +94,7 @@ async def consolidate(db: AsyncSession) -> Dict[str, int]:
     except Exception as e:
         log.warning("Exact dedup pass failed: %s", e)
 
-    # Pass 4: Semantic deduplication — find near-duplicate embeddings
+    # Pass 5: Semantic deduplication — find near-duplicate embeddings
     try:
         # Find pairs of memories with very high cosine similarity
         dup_rows = await db.execute(text(f"""

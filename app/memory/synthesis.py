@@ -66,16 +66,16 @@ async def synthesize_topic(
         return f"Knowledge summary for '{topic}':\n" + "\n".join(lines)
 
     mem_text = "\n".join(
-        f"{i+1}. [{m.memory_type}] {m.content}" for i, m in enumerate(fused)
+        f"{i+1}. [{m.memory_type}] {m.content[:400]}" for i, m in enumerate(fused[:20])
     )
 
     try:
         resp = await llm.chat.completions.create(
             model=settings.llm_model,
             messages=[{"role": "user", "content": _SYNTH_PROMPT.format(
-                topic=topic, agent=agent_id or "all", count=len(fused), memories=mem_text
+                topic=topic, agent=agent_id or "all", count=min(len(fused), 20), memories=mem_text
             )}],
-            max_tokens=800,
+            max_tokens=settings.llm_synthesis_max_tokens,
             temperature=0.2,
         )
         return resp.choices[0].message.content.strip()

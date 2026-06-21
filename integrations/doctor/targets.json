@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "description": "Declarative Nexus Doctor targets. Paths support {home}, {root}, and {cwd}.",
+  "targets": [
+    {
+      "id": "amp-instructions",
+      "kind": "instructions",
+      "path": "{home}/.config/amp/NEXUS.md",
+      "agent": "amp"
+    },
+    {
+      "id": "continue-instructions",
+      "kind": "instructions",
+      "path": "{home}/.continue/NEXUS.md",
+      "agent": "continue"
+    },
+    {
+      "id": "continue-project-instructions",
+      "kind": "instructions",
+      "path": "{cwd}/.continue/NEXUS.md",
+      "agent": "continue-project"
+    },
+    {
+      "id": "zed-project-instructions",
+      "kind": "instructions",
+      "path": "{cwd}/.zed/nexus-memory.md",
+      "agent": "zed"
+    },
+    {
+      "id": "pearai-mcp",
+      "kind": "mcpServers",
+      "path": "{home}/.config/PearAI/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+      "agent": "pearai-cline",
+      "transport": "http"
+    },
+    {
+      "id": "vscodium-mcp",
+      "kind": "servers",
+      "path": "{home}/.config/VSCodium/User/mcp.json",
+      "agent": "vscodium",
+      "transport": "http"
+    },
+    {
+      "id": "vscode-insiders-mcp",
+      "kind": "servers",
+      "path": "{home}/.config/Code - Insiders/User/mcp.json",
+      "agent": "vscode-insiders",
+      "transport": "http"
+    },
+    {
+      "id": "dify-openapi-template",
+      "kind": "instructions",
+      "path": "{root}/integrations/low-code/dify-nexus-tool.md",
+      "agent": "dify"
+    },
+    {
+      "id": "flowise-openapi-template",
+      "kind": "instructions",
+      "path": "{root}/integrations/low-code/flowise-nexus-tool.md",
+      "agent": "flowise"
+    },
+    {
+      "id": "langflow-openapi-template",
+      "kind": "instructions",
+      "path": "{root}/integrations/low-code/langflow-nexus-tool.md",
+      "agent": "langflow"
+    },
+    {
+      "id": "n8n-openapi-template",
+      "kind": "instructions",
+      "path": "{root}/integrations/low-code/n8n-nexus-tool.md",
+      "agent": "n8n"
+    },
+    {
+      "id": "openwebui-openapi-template",
+      "kind": "instructions",
+      "path": "{root}/integrations/low-code/openwebui-nexus-tool.md",
+      "agent": "openwebui"
+    },
+    {
+      "id": "librechat-openapi-template",
+      "kind": "instructions",
+      "path": "{root}/integrations/low-code/librechat-nexus-tool.md",
+      "agent": "librechat"
+    },
+    {
+      "id": "anythingllm-openapi-template",
+      "kind": "instructions",
+      "path": "{root}/integrations/low-code/anythingllm-nexus-tool.md",
+      "agent": "anythingllm"
+    }
+  ]
+}

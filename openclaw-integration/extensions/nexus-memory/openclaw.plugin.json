@@ -1,0 +1,45 @@
+{
+  "id": "nexus-memory",
+  "name": "Nexus Memory",
+  "description": "Unified long-term memory via Nexus — 4-way recall, lessons, entity graph, rolling summaries, optimized for token efficiency.",
+  "kind": "memory",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["memory_forget", "memory_recall", "memory_store"]
+  },
+  "uiHints": {
+    "nexusUrl": {
+      "label": "Nexus URL",
+      "placeholder": "http://100.93.75.87:7777"
+    },
+    "nexusSecret": {
+      "label": "Nexus API Secret",
+      "sensitive": true
+    },
+    "agentId": {
+      "label": "Agent ID",
+      "placeholder": "openclaw"
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Automatically save conversation highlights to Nexus (with conditional save optimization)"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Automatically inject relevant memories before each response (with slim context injection)"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "nexusUrl":    { "type": "string" },
+      "nexusSecret": { "type": "string" },
+      "agentId":     { "type": "string" },
+      "autoCapture": { "type": "boolean" },
+      "autoRecall":  { "type": "boolean" }
+    }
+  }
+}

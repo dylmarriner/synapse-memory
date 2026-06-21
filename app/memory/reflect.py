@@ -40,11 +40,12 @@ async def reflect(
             based_on=recalled[:10],
         )
 
-    depth_tokens = {"low": 150, "mid": 400, "high": 900}
+    cap = settings.llm_reflect_max_tokens
+    depth_tokens = {"low": min(120, cap), "mid": min(300, cap), "high": min(600, cap)}
     max_tokens = depth_tokens.get(req.depth, 400)
 
     mem_text = "\n".join(
-        f"{i+1}. [{m.memory_type}] {m.content[:500]}" for i, m in enumerate(recalled[:15])
+        f"{i+1}. [{m.memory_type}] {m.content[:300]}" for i, m in enumerate(recalled[:10])
     )
     ctx_str = f"\nContext: {req.context}" if req.context else ""
 

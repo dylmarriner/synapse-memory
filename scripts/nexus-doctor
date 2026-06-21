@@ -1,0 +1,418 @@
+#!/usr/bin/env python3
+"""Nexus Doctor — scan, diagnose, and auto-connect AI agents/IDEs.
+
+Default mode is safe scan-only. Use `--apply` to write config changes. Every
+changed file is backed up beside the original with a `.nexus-backup-<ts>` suffix.
+
+Examples:
+  scripts/nexus-doctor
+  scripts/nexus-doctor --apply
+  scripts/nexus-doctor --apply --nexus-url http://100.93.75.87:7777 --secret "$NEXUS_SECRET"
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+HOME = Path.home()
+TS = time.strftime("%Y%m%d-%H%M%S")
+
+
+@dataclass
+class Finding:
+    target: str
+    path: Path
+    status: str
+    detail: str
+    action: str = ""
+
+
+def parse_env_file(path: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    if not path.exists():
+        return result
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        result[k.strip()] = v.strip().strip('"').strip("'")
+    return result
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def backup(path: Path) -> Path | None:
+    if not path.exists():
+        return None
+    backup_path = path.with_name(path.name + f".nexus-backup-{TS}")
+    shutil.copy2(path, backup_path)
+    return backup_path
+
+
+def write_json(path: Path, data: dict[str, Any], apply: bool) -> str:
+    if not apply:
+        return "dry-run"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    b = backup(path)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return f"written" + (f"; backup={b}" if b else "")
+
+
+def expand_path_template(value: str) -> Path:
+    return Path(value.format(home=str(HOME), root=str(ROOT), cwd=str(Path.cwd()))).expanduser()
+
+
+def load_declarative_targets() -> list[dict[str, Any]]:
+    registry = ROOT / "integrations" / "doctor" / "targets.json"
+    if not registry.exists():
+        return []
+    try:
+        data = json.loads(registry.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    targets = []
+    for raw in data.get("targets", []):
+        if not isinstance(raw, dict) or "id" not in raw or "kind" not in raw or "path" not in raw:
+            continue
+        target = dict(raw)
+        target["path"] = expand_path_template(str(raw["path"]))
+        target.setdefault("agent", target["id"])
+        targets.append(target)
+    return targets
+
+
+def nexus_mcp_http(url: str, secret: str) -> dict[str, Any]:
+    return {
+        "url": f"{url.rstrip('/')}/mcp",
+        "headers": {"Authorization": f"Bearer {secret}"},
+    }
+
+
+def nexus_mcp_stdio(url: str, secret: str, agent_id: str) -> dict[str, Any]:
+    return {
+        "command": "python3",
+        "args": [str(ROOT / "scripts" / "adapters" / "nexus_mcp_stdio.py")],
+        "env": {
+            "NEXUS_URL": url.rstrip("/"),
+            "NEXUS_SECRET": secret,
+            "NEXUS_AGENT_ID": agent_id,
+        },
+        "disabled": False,
+    }
+
+
+def merge_mcp_server(config: dict[str, Any], key: str, server: dict[str, Any]) -> dict[str, Any]:
+    current = config.get(key)
+    if not isinstance(current, dict):
+        current = {}
+    current["nexus"] = server
+    config[key] = current
+    return config
+
+
+def merge_opencode(config: dict[str, Any], url: str, secret: str) -> dict[str, Any]:
+    mcp = config.get("mcp")
+    if not isinstance(mcp, dict):
+        mcp = {}
+    mcp["nexus-memory"] = {
+        "type": "local",
+        "command": ["python3", str(ROOT / "scripts" / "adapters" / "nexus_mcp_stdio.py")],
+        "environment": {
+            "NEXUS_URL": url.rstrip("/"),
+            "NEXUS_SECRET": secret,
+            "NEXUS_AGENT_ID": "opencode",
+        },
+    }
+    config["mcp"] = mcp
+    return config
+
+
+def merge_gemini_settings(config: dict[str, Any], url: str, secret: str) -> dict[str, Any]:
+    """Merge Nexus MCP into Gemini/Qwen-style settings.json.
+
+    Gemini CLI documents MCP servers in ~/.gemini/settings.json. Qwen Code is
+    derived from Gemini CLI and commonly uses analogous settings. Preserve any
+    existing keys and only add/update the `nexus` server.
+    """
+    servers = config.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+    servers["nexus"] = {
+        "url": f"{url.rstrip('/')}/mcp",
+        "headers": {"Authorization": f"Bearer {secret}"},
+    }
+    config["mcpServers"] = servers
+    return config
+
+
+def discover_vscode_like_targets() -> list[dict[str, Any]]:
+    """Discover known VS Code-compatible AI extension MCP settings."""
+    app_dirs = {
+        "code": HOME / ".config" / "Code" / "User" / "globalStorage",
+        "code-insiders": HOME / ".config" / "Code - Insiders" / "User" / "globalStorage",
+        "vscodium": HOME / ".config" / "VSCodium" / "User" / "globalStorage",
+        "cursor": HOME / ".config" / "Cursor" / "User" / "globalStorage",
+        "windsurf": HOME / ".config" / "Windsurf" / "User" / "globalStorage",
+        "antigravity": HOME / ".config" / "Antigravity" / "User" / "globalStorage",
+        "trae": HOME / ".config" / "Trae" / "User" / "globalStorage",
+        "pearai": HOME / ".config" / "PearAI" / "User" / "globalStorage",
+    }
+    extension_patterns = {
+        "saoudrizwan.claude-dev": ["settings/cline_mcp_settings.json"],
+        "rooveterinaryinc.roo-cline": ["settings/mcp_settings.json", "settings/cline_mcp_settings.json"],
+        "roo-code": ["settings/mcp_settings.json", "settings/cline_mcp_settings.json"],
+        "kilocode.kilo-code": ["settings/mcp_settings.json", "settings/cline_mcp_settings.json"],
+        "kade.kade": ["settings/mcp_settings.json"],
+    }
+    targets: list[dict[str, Any]] = []
+    seen: set[Path] = set()
+    for app, root in app_dirs.items():
+        if not root.exists():
+            continue
+        for ext_id, rels in extension_patterns.items():
+            ext_root = root / ext_id
+            if not ext_root.exists():
+                continue
+            for rel in rels:
+                path = ext_root / rel
+                if path in seen:
+                    continue
+                seen.add(path)
+                targets.append({
+                    "id": f"{app}-{ext_id}",
+                    "kind": "mcpServers",
+                    "path": path,
+                    "agent": f"{app}-{ext_id}",
+                    "transport": "http",
+                })
+    return targets
+
+
+def project_instruction_targets() -> list[dict[str, Any]]:
+    """Instruction files in the current Nexus repo for agent compatibility."""
+    cwd = Path.cwd()
+    return [
+        {"id": "project-agents-md", "kind": "instructions", "path": cwd / "AGENTS.md", "agent": "project-agents"},
+        {"id": "project-gemini-md", "kind": "instructions", "path": cwd / "GEMINI.md", "agent": "gemini-cli"},
+        {"id": "project-qwen-md", "kind": "instructions", "path": cwd / "QWEN.md", "agent": "qwen-code"},
+        {"id": "project-copilot-instructions", "kind": "instructions", "path": cwd / ".github" / "copilot-instructions.md", "agent": "github-copilot"},
+        {"id": "project-cursor-rules", "kind": "instructions", "path": cwd / ".cursor" / "rules" / "nexus-memory.mdc", "agent": "cursor"},
+        {"id": "project-windsurfrules", "kind": "instructions", "path": cwd / ".windsurfrules", "agent": "windsurf"},
+        {"id": "project-clinerules", "kind": "instructions", "path": cwd / ".clinerules", "agent": "cline"},
+    ]
+
+
+def candidate_targets() -> list[dict[str, Any]]:
+    builtin_targets = [
+        # Claude family
+        {"id": "claude-desktop", "kind": "mcpServers", "path": HOME / ".config" / "Claude" / "claude_desktop_config.json", "agent": "claude-desktop", "transport": "stdio"},
+        {"id": "claude-code-settings", "kind": "instructions", "path": HOME / ".claude" / "CLAUDE.md", "agent": "claude-code"},
+
+        # Cline direct + VS Code-like extension storage locations.
+        {"id": "cline", "kind": "mcpServers", "path": HOME / ".cline" / "data" / "settings" / "cline_mcp_settings.json", "agent": "cline", "transport": "stdio"},
+        {"id": "windsurf-cline", "kind": "mcpServers", "path": HOME / ".config" / "Windsurf" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json", "agent": "windsurf-cline", "transport": "http"},
+        {"id": "antigravity-cline", "kind": "mcpServers", "path": HOME / ".config" / "Antigravity" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json", "agent": "antigravity-cline", "transport": "http"},
+        {"id": "trae-cline", "kind": "mcpServers", "path": HOME / ".config" / "Trae" / "User" / "globalStorage" / "saoudrizwan.claude-dev" / "settings" / "cline_mcp_settings.json", "agent": "trae-cline", "transport": "http"},
+
+        # Kade/Kilo style MCP settings inside VS Code-like IDEs.
+        {"id": "windsurf-kade", "kind": "mcpServers", "path": HOME / ".config" / "Windsurf" / "User" / "globalStorage" / "kade.kade" / "settings" / "mcp_settings.json", "agent": "windsurf-kade", "transport": "http"},
+        {"id": "windsurf-kilocode", "kind": "mcpServers", "path": HOME / ".config" / "Windsurf" / "User" / "globalStorage" / "kilocode.kilo-code" / "settings" / "mcp_settings.json", "agent": "windsurf-kilocode", "transport": "http"},
+        {"id": "antigravity-kade", "kind": "mcpServers", "path": HOME / ".config" / "Antigravity" / "User" / "globalStorage" / "kade.kade" / "settings" / "mcp_settings.json", "agent": "antigravity-kade", "transport": "http"},
+        {"id": "trae-kade", "kind": "mcpServers", "path": HOME / ".config" / "Trae" / "User" / "globalStorage" / "kade.kade" / "settings" / "mcp_settings.json", "agent": "trae-kade", "transport": "http"},
+
+        # IDE/global MCP files.
+        {"id": "windsurf", "kind": "mcpServers", "path": HOME / ".codeium" / "windsurf" / "mcp_config.json", "agent": "windsurf", "transport": "http"},
+        {"id": "antigravity", "kind": "mcpServers", "path": HOME / ".gemini" / "antigravity" / "mcp_config.json", "agent": "antigravity", "transport": "http"},
+        {"id": "vscode", "kind": "servers", "path": HOME / ".vscode" / "mcp.json", "agent": "vscode", "transport": "http"},
+        {"id": "cursor", "kind": "mcpServers", "path": HOME / ".cursor" / "mcp.json", "agent": "cursor", "transport": "http"},
+
+        # Other agent CLIs/configs.
+        {"id": "gemini-cli", "kind": "gemini-settings", "path": HOME / ".gemini" / "settings.json", "agent": "gemini-cli"},
+        {"id": "qwen-code", "kind": "gemini-settings", "path": HOME / ".qwen" / "settings.json", "agent": "qwen-code"},
+        {"id": "codex-cli-instructions", "kind": "instructions", "path": HOME / ".codex" / "NEXUS.md", "agent": "codex-cli"},
+        {"id": "aider-instructions", "kind": "instructions", "path": HOME / ".aider" / "NEXUS.md", "agent": "aider"},
+        {"id": "opencode", "kind": "opencode", "path": HOME / ".config" / "opencode" / "opencode.json", "agent": "opencode"},
+        {"id": "paperclip", "kind": "paperclip", "path": HOME / ".config" / "paperclip" / "nexus-memory.json", "agent": "paperclip"},
+        {"id": "goose", "kind": "envfile", "path": HOME / ".goose" / "nexus.env", "agent": "goose"},
+        {"id": "openhands", "kind": "envfile", "path": HOME / ".openhands" / "nexus.env", "agent": "openhands"},
+        {"id": "swe-agent", "kind": "envfile", "path": HOME / ".swe-agent" / "nexus.env", "agent": "swe-agent"},
+        {"id": "hermes", "kind": "envfile", "path": HOME / ".hermes" / "nexus.env", "agent": "hermes"},
+        {"id": "openclaw", "kind": "envfile", "path": HOME / ".openclaw" / "nexus.env", "agent": "openclaw"},
+        {"id": "devin-cli", "kind": "instructions", "path": HOME / ".devin" / "NEXUS.md", "agent": "devin-cli"},
+    ]
+    return builtin_targets + load_declarative_targets() + discover_vscode_like_targets() + project_instruction_targets()
+
+
+def connect_target(target: dict[str, Any], url: str, secret: str, apply: bool) -> Finding:
+    path = target["path"]
+    kind = target["kind"]
+    existed = path.exists()
+    status = "found" if existed else "missing"
+
+    try:
+        if kind in {"mcpServers", "servers"}:
+            config = load_json(path)
+            transport = target.get("transport", "http")
+            server = nexus_mcp_stdio(url, secret, target["agent"]) if transport == "stdio" else nexus_mcp_http(url, secret)
+            config = merge_mcp_server(config, kind, server)
+            action = write_json(path, config, apply)
+            return Finding(target["id"], path, status, f"configured MCP via {transport}", action)
+
+        if kind == "opencode":
+            config = merge_opencode(load_json(path), url, secret)
+            action = write_json(path, config, apply)
+            return Finding(target["id"], path, status, "configured OpenCode local MCP", action)
+
+        if kind == "gemini-settings":
+            config = merge_gemini_settings(load_json(path), url, secret)
+            action = write_json(path, config, apply)
+            return Finding(target["id"], path, status, "configured Gemini/Qwen MCP settings", action)
+
+        if kind == "paperclip":
+            config = {
+                "nexusUrl": url.rstrip("/"),
+                "nexusSecret": secret,
+                "agentIdPrefix": "paperclip",
+                "defaultLimit": 8,
+                "rtkWrapper": str(ROOT / "scripts" / "nexus-rtk"),
+            }
+            action = write_json(path, config, apply)
+            return Finding(target["id"], path, status, "wrote Paperclip Nexus config", action)
+
+        if kind == "envfile":
+            content = (
+                f"NEXUS_URL={url.rstrip('/')}\n"
+                f"NEXUS_SECRET={secret}\n"
+                f"NEXUS_AGENT_ID={target['agent']}\n"
+                f"RTK_TELEMETRY_DISABLED=1\n"
+                f"NEXUS_RTK_WRAPPER={ROOT / 'scripts' / 'nexus-rtk'}\n"
+            )
+            if apply:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                b = backup(path)
+                path.write_text(content, encoding="utf-8")
+                action = "written" + (f"; backup={b}" if b else "")
+            else:
+                action = "dry-run"
+            return Finding(target["id"], path, status, "wrote env bootstrap", action)
+
+        if kind == "instructions":
+            instruction = f"""# Nexus + RTK Agent Instructions
+
+Nexus is available for durable memory.
+
+- REST: {url.rstrip('/')}/v1
+- MCP: {url.rstrip('/')}/mcp
+- Agent ID: {target['agent']}
+
+Use Nexus memory tools for durable preferences, lessons, fixes, decisions, and handoffs.
+Use `{ROOT / 'scripts' / 'nexus-rtk'} <command>` for noisy shell commands when possible;
+fall back to `rtk <command>` if the wrapper is unavailable.
+Do not store raw command noise as memory; save durable summaries/lessons only.
+"""
+            if apply:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                b = backup(path)
+                existing = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+                if "# Nexus + RTK Agent Instructions" not in existing:
+                    path.write_text((existing.rstrip() + "\n\n" + instruction).lstrip(), encoding="utf-8")
+                action = "written" + (f"; backup={b}" if b else "")
+            else:
+                action = "dry-run"
+            return Finding(target["id"], path, status, "wrote agent instructions", action)
+
+        return Finding(target["id"], path, status, f"unsupported target kind {kind}", "skip")
+    except Exception as e:
+        return Finding(target["id"], path, "error", str(e), "failed")
+
+
+def health_check(url: str) -> tuple[bool, str]:
+    try:
+        with urllib.request.urlopen(f"{url.rstrip('/')}/health", timeout=3) as resp:
+            return True, resp.read().decode("utf-8", "replace")[:500]
+    except Exception as e:
+        return False, str(e)
+
+
+def command_ok(cmd: list[str]) -> tuple[bool, str]:
+    try:
+        p = subprocess.run(cmd, text=True, capture_output=True, timeout=8)
+        return p.returncode == 0, (p.stdout + p.stderr).strip()[:500]
+    except Exception as e:
+        return False, str(e)
+
+
+def main() -> int:
+    env = parse_env_file(ROOT / ".env")
+    parser = argparse.ArgumentParser(description="Scan and auto-connect Nexus to AI agents/IDEs")
+    parser.add_argument("--apply", action="store_true", help="write changes; default is scan/dry-run")
+    parser.add_argument("--nexus-url", default=os.getenv("NEXUS_URL") or env.get("NEXUS_URL") or f"http://localhost:{env.get('NEXUS_PORT', '7777')}")
+    parser.add_argument("--secret", default=os.getenv("NEXUS_SECRET") or env.get("NEXUS_SECRET") or "")
+    parser.add_argument("--json", action="store_true", help="emit JSON report")
+    args = parser.parse_args()
+
+    report: dict[str, Any] = {
+        "mode": "apply" if args.apply else "dry-run",
+        "nexus_url": args.nexus_url,
+        "root": str(ROOT),
+        "checks": {},
+        "findings": [],
+    }
+
+    ok, detail = health_check(args.nexus_url)
+    report["checks"]["nexus_health"] = {"ok": ok, "detail": detail}
+    ok, detail = command_ok(["rtk", "gain"])
+    report["checks"]["rtk"] = {"ok": ok, "detail": detail}
+    ok, detail = command_ok([sys.executable, str(ROOT / "scripts" / "nexus-rtk"), "git", "status", "--short"])
+    report["checks"]["nexus_rtk_wrapper"] = {"ok": ok, "detail": detail}
+
+    if args.apply and not args.secret:
+        print("ERROR: --apply requires NEXUS_SECRET via --secret, env, or .env", file=sys.stderr)
+        return 2
+
+    for target in candidate_targets():
+        finding = connect_target(target, args.nexus_url, args.secret or "${NEXUS_SECRET}", args.apply)
+        report["findings"].append(finding.__dict__ | {"path": str(finding.path)})
+
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        print("== Nexus Doctor ==")
+        print(f"Mode: {report['mode']}")
+        print(f"Nexus URL: {args.nexus_url}")
+        print("\nChecks:")
+        for name, check in report["checks"].items():
+            mark = "OK" if check["ok"] else "WARN"
+            print(f"  [{mark}] {name}: {check['detail']}")
+        print("\nTargets:")
+        for f in report["findings"]:
+            print(f"  - {f['target']}: {f['status']} → {f['detail']} ({f['action']})")
+            print(f"    {f['path']}")
+        if not args.apply:
+            print("\nDry-run only. Re-run with --apply to write configs. Backups are created automatically.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

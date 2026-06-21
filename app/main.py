@@ -50,6 +50,8 @@ from app.routers.search import router as search_router
 from app.routers.admin import router as admin_router
 from app.routers.browse import router as browse_router
 from app.routers.stream import router as stream_router
+from app.routers.rtk import router as rtk_router
+from app.routers.sessions import router as sessions_router
 from app.mcp import mcp_router
 from app.routers.sys_bridge import router as sys_bridge_router
 from app.routers.synapse import router as synapse_router
@@ -73,6 +75,9 @@ async def _run_migrations():
             "ALTER TABLE memories ADD COLUMN IF NOT EXISTS contradicted_count INT NOT NULL DEFAULT 0",
             "ALTER TABLE memories ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 1",
             "ALTER TABLE memories ADD COLUMN IF NOT EXISTS superseded_by UUID REFERENCES memories(id) ON DELETE SET NULL",
+            "ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_active TIMESTAMPTZ",
+            "ALTER TABLE agents ADD COLUMN IF NOT EXISTS session_count INT NOT NULL DEFAULT 0",
+            "ALTER TABLE agents ADD COLUMN IF NOT EXISTS model VARCHAR(100)",
         ]:
             try:
                 await conn.execute(text(col_sql))
@@ -100,6 +105,8 @@ async def _run_migrations():
             "CREATE INDEX IF NOT EXISTS idx_memories_embedding_hnsw ON memories USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)",
             "CREATE INDEX IF NOT EXISTS idx_memories_type_priority ON memories(memory_type, importance DESC, created_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_memories_tags_gin ON memories USING gin ((metadata->'tags'))",
+            "CREATE INDEX IF NOT EXISTS idx_agents_last_active ON agents (last_active DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_agents_model ON agents (model)",
         ]:
             try:
                 await conn.execute(text(index_sql))
@@ -160,6 +167,60 @@ async def _run_migrations():
             except Exception as e:
                 log.warning("Synapse index skip: %s", e)
 
+        # Raw session archive + memory provenance tables.
+        for session_sql in [
+            """
+            CREATE TABLE IF NOT EXISTS sessions (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                agent_id    UUID REFERENCES agents(id) ON DELETE SET NULL,
+                agent_name  TEXT NOT NULL,
+                project_key TEXT,
+                title       TEXT,
+                started_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                ended_at    TIMESTAMPTZ,
+                metadata    JSONB NOT NULL DEFAULT '{}'
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS messages (
+                id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                session_id     UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                role           TEXT NOT NULL,
+                content        TEXT NOT NULL,
+                token_estimate INT NOT NULL DEFAULT 0,
+                created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                metadata       JSONB NOT NULL DEFAULT '{}'
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS memory_sources (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                memory_id   UUID NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+                source_kind TEXT NOT NULL,
+                source_id   UUID NOT NULL,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                metadata    JSONB NOT NULL DEFAULT '{}',
+                UNIQUE(memory_id, source_kind, source_id)
+            )
+            """,
+        ]:
+            try:
+                await conn.execute(text(session_sql.strip()))
+            except Exception as e:
+                log.warning("Session table create skipped: %s", e)
+
+        for session_idx in [
+            "CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_name, started_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_key, started_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_messages_session_time ON messages(session_id, created_at ASC)",
+            "CREATE INDEX IF NOT EXISTS idx_memory_sources_memory ON memory_sources(memory_id)",
+            "CREATE INDEX IF NOT EXISTS idx_memory_sources_source ON memory_sources(source_kind, source_id)",
+        ]:
+            try:
+                await conn.execute(text(session_idx))
+            except Exception as e:
+                log.warning("Session index skipped: %s", e)
+
 
         # Backfill basic device metadata so the dashboard can place legacy agents.
         try:
@@ -209,11 +270,17 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(
         _learning_loop(redis_client, settings.learning_interval)
     )
+    
+    # Start the scheduler for daily consolidation reports
+    from app.scheduler import scheduler_loop
+    scheduler_task = asyncio.create_task(scheduler_loop())
+    log.info("Scheduler started for daily consolidation reports")
 
     log.info("Nexus ready — REST: /v1  MCP: /mcp  Dashboard: /")
     yield
 
     task.cancel()
+    scheduler_task.cancel()
     await redis_client.aclose()
     await engine.dispose()
     log.info("Nexus stopped")
@@ -257,6 +324,8 @@ app.include_router(search_router,  prefix="/v1/search",  tags=["search"],  depen
 app.include_router(admin_router,   prefix="/v1",         tags=["admin"],   dependencies=[Depends(_verify_key)])
 app.include_router(browse_router,  prefix="/v1/browse",  tags=["browse"],  dependencies=[Depends(_verify_key)])
 app.include_router(stream_router,  prefix="/v1",         tags=["stream"])  # auth handled internally (EventSource can't set headers)
+app.include_router(rtk_router,     prefix="/v1/rtk",     tags=["rtk"],     dependencies=[Depends(_verify_key)])
+app.include_router(sessions_router, prefix="/v1/sessions", tags=["sessions"], dependencies=[Depends(_verify_key)])
 app.include_router(mcp_router,        prefix="/mcp",           tags=["mcp"],        dependencies=[Depends(_verify_key)])
 app.include_router(sys_bridge_router,  prefix="/v1/sys",  tags=["sys"],  dependencies=[Depends(_verify_key)])
 app.include_router(synapse_router, prefix="/v1/synapse", tags=["synapse"], dependencies=[Depends(_verify_key)])

@@ -5,10 +5,19 @@ import json
 import os
 import sys
 import urllib.request
+from pathlib import Path
+
+try:
+    from nexus_hook_utils import AGENT_ID, PROJECT_KEY, append_session, start_session
+except Exception:
+    AGENT_ID = os.getenv("NEXUS_AGENT_ID", "claude-code")
+    PROJECT_KEY = os.getenv("NEXUS_PROJECT_KEY") or Path.cwd().name
+    def start_session(*args, **kwargs): return None
+    def append_session(*args, **kwargs): return None
 
 NEXUS_URL = os.getenv("NEXUS_URL", "http://localhost:7777")
 NEXUS_TOKEN = os.getenv("NEXUS_SECRET", "")
-AGENT_ID = os.getenv("NEXUS_AGENT_ID", "claude-code")
+AGENT_ID = os.getenv("NEXUS_AGENT_ID", AGENT_ID)
 
 SKILLS_CONTEXT = """ENHANCEMENT SKILLS AUTO-ACTIVE:
 - apex-agent: Apply APEX cognitive framework (structured thinking, context-aware modes, execution precision) to every response.
@@ -26,7 +35,18 @@ NEXUS NATIVE-SKILLS AUTO-ACTIVE:
 These instructions are loaded from ~/.claude/skills/ to govern memory storage and recall decisions automatically.
 """
 
+RTK_CONTEXT = """
+RTK TOKEN OPTIMIZER AUTO-ACTIVE:
+- Prefer `rtk` for noisy shell commands: git status/diff/log, ls/tree/read/grep, pytest, npm/pnpm, docker, kubectl, cargo, go.
+- Use raw commands or `rtk proxy <cmd>` only when exact unfiltered output is required.
+- RTK reduces transient command-output tokens; Nexus still stores durable memories in full.
+"""
+
 try:
+    sid = start_session(title=f"{AGENT_ID} session in {PROJECT_KEY}", metadata={"hook": "SessionStart"})
+    if sid:
+        append_session("system", f"SessionStart hook initialized Nexus session {sid} for agent {AGENT_ID} in project {PROJECT_KEY}.", {"hook": "SessionStart"})
+
     req = urllib.request.Request(
         f"{NEXUS_URL}/v1/agents/{AGENT_ID}/context",
         headers={"Authorization": f"Bearer {NEXUS_TOKEN}"}
@@ -34,7 +54,8 @@ try:
     resp = urllib.request.urlopen(req, timeout=5)
     data = json.loads(resp.read())
 
-    lines = [SKILLS_CONTEXT, NEXUS_SKILLS_AUTO_LOAD, "", f"=== NEXUS MEMORY CONTEXT (agent: {AGENT_ID}) ==="]
+    session_line = f"NEXUS RAW SESSION ACTIVE: {sid}" if sid else "NEXUS RAW SESSION: unavailable"
+    lines = [SKILLS_CONTEXT, NEXUS_SKILLS_AUTO_LOAD, RTK_CONTEXT, session_line, "", f"=== NEXUS MEMORY CONTEXT (agent: {AGENT_ID}) ==="]
 
     if data.get("summary"):
         lines.append(f"\nROLLING SUMMARY:\n{data['summary']}")
@@ -73,6 +94,6 @@ except Exception:
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
-            "additionalContext": SKILLS_CONTEXT + "\n" + NEXUS_SKILLS_AUTO_LOAD + "\n\n[NEXUS: Memory server unavailable — context not loaded]",
+            "additionalContext": SKILLS_CONTEXT + "\n" + NEXUS_SKILLS_AUTO_LOAD + "\n" + RTK_CONTEXT + "\n\n[NEXUS: Memory server unavailable — context not loaded]",
         }
     }))

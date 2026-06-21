@@ -16,23 +16,15 @@ from app.embeddings import get_embedding
 log = logging.getLogger("nexus.memory.extract")
 _WORKER_HEARTBEAT = Path("/tmp/nexus-worker-heartbeat")
 
-_EXTRACT_PROMPT = """Analyze this memory and return ONLY valid JSON:
+_EXTRACT_PROMPT = """Return minified JSON for memory analysis:
 {{
   "type": "world|experience|observation|preference|lesson",
   "entities": [{{"name": "...", "type": "person|place|organization|concept|technology|project|other"}}],
-  "conclusion": "1-sentence conclusion (omit if not observation/lesson)"
+  "conclusion": "<=15 words; omit unless observation/lesson"
 }}
 
-Guidelines:
-- world: general fact about the world
-- experience: specific event that happened
-- observation: insight or derived pattern
-- preference: preference, opinion, or desire
-- lesson: correction, mistake, or lesson learned
-
 Memory: {content}
-
-Return ONLY valid JSON."""
+Only JSON."""
 
 _PATTERN_PROMPT = """Analyze these memories and identify any significant patterns or recurring themes.
 Return 2-4 pattern observations as a JSON array of strings.
@@ -76,7 +68,7 @@ async def _batch_extract(content: str, llm, importance: float = 0.5) -> Dict[str
         try:
             resp = await llm.chat.completions.create(
                 model=model,
-                messages=[{"role": "user", "content": "Classify this as world|experience|observation|preference|lesson. Return EXACTLY one word.\n\n" + content[:1500]}],
+                messages=[{"role": "user", "content": "Classify as world|experience|observation|preference|lesson. One word.\n" + content[:settings.llm_input_char_limit]}],
                 max_tokens=10,
                 temperature=0,
                 timeout=10,
@@ -95,8 +87,8 @@ async def _batch_extract(content: str, llm, importance: float = 0.5) -> Dict[str
     try:
         resp = await llm.chat.completions.create(
             model=model,
-            messages=[{"role": "user", "content": _EXTRACT_PROMPT.format(content=content[:2000])}],
-            max_tokens=500,
+            messages=[{"role": "user", "content": _EXTRACT_PROMPT.format(content=content[:settings.llm_input_char_limit])}],
+            max_tokens=settings.llm_extract_max_tokens,
             temperature=0,
             timeout=15,
         )
@@ -124,11 +116,11 @@ async def _detect_patterns(memories: List[str], llm) -> List[str]:
     if len(memories) < 5:
         return []
     try:
-        mem_text = "\n".join(f"- {m[:200]}" for m in memories[:20])
+        mem_text = "\n".join(f"- {m[:160]}" for m in memories[:12])
         resp = await llm.chat.completions.create(
             model=settings.llm_model,
             messages=[{"role": "user", "content": _PATTERN_PROMPT.format(memories=mem_text)}],
-            max_tokens=200,
+            max_tokens=160,
             temperature=0.3,
         )
         parsed = json.loads(resp.choices[0].message.content.strip())
@@ -153,15 +145,15 @@ async def _build_summary(agent_name: str, agent_id: str, db, llm) -> Optional[st
             SELECT content, memory_type FROM memories
             WHERE agent_id = CAST(:id AS uuid)
             ORDER BY importance DESC, created_at DESC
-            LIMIT 20
+            LIMIT 12
         """), {"id": agent_id})
-        memories = [f"[{r.memory_type}] {r.content}" for r in m_rows.fetchall()]
+        memories = [f"[{r.memory_type}] {r.content[:settings.llm_input_char_limit // 3]}" for r in m_rows.fetchall()]
 
         # Get conclusions
         c_rows = await db.execute(text("""
             SELECT content FROM conclusions
             WHERE agent_id = CAST(:id AS uuid)
-            ORDER BY created_at DESC LIMIT 10
+            ORDER BY created_at DESC LIMIT 6
         """), {"id": agent_id})
         conclusions = [r.content for r in c_rows.fetchall()]
 
@@ -173,7 +165,7 @@ async def _build_summary(agent_name: str, agent_id: str, db, llm) -> Optional[st
                 memories="\n".join(f"- {m}" for m in memories),
                 conclusions="\n".join(f"- {c}" for c in conclusions) or "(none yet)",
             )}],
-            max_tokens=350,
+            max_tokens=settings.llm_summary_max_tokens,
             temperature=0.2,
         )
         summary = resp.choices[0].message.content.strip()

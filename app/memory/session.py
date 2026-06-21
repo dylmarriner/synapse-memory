@@ -40,13 +40,15 @@ async def extract_session_facts(
         return []
 
     lines = []
-    for m in messages[-40:]:
+    max_messages = 24 if settings.llm_cost_saver else 40
+    per_message_chars = 220 if settings.llm_cost_saver else 300
+    for m in messages[-max_messages:]:
         role = m.get("role", "?")
         content = m.get("content", "")
         if isinstance(content, list):
             content = " ".join(c.get("text", "") for c in content if isinstance(c, dict))
         if content:
-            lines.append(f"{role}: {content[:300]}")
+            lines.append(f"{role}: {content[:per_message_chars]}")
 
     if len(lines) < 3:
         return []
@@ -57,9 +59,9 @@ async def extract_session_facts(
         resp = await llm.chat.completions.create(
             model=settings.llm_model,
             messages=[{"role": "user", "content": _EXTRACT_SESSION_PROMPT.format(
-                conversation=conversation[:6000]
+                conversation=conversation[: min(4000, settings.llm_input_char_limit * 4)]
             )}],
-            max_tokens=600,
+            max_tokens=min(350, settings.llm_extract_max_tokens * 2),
             temperature=0.1,
         )
         raw = (resp.choices[0].message.content or "").strip()

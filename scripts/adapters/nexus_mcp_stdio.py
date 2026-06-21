@@ -25,6 +25,11 @@ TOOLS = [
     {"name":"memory_profile","description":"Get complete profile of an agent — all facts, conclusions, representation. No query needed.","inputSchema":{"type":"object","properties":{"agent_id":{"type":"string"}},"required":["agent_id"]}},
     {"name":"memory_forget_by_query","description":"Find and delete memories matching a query. For GDPR/PII compliance.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"agent_id":{"type":"string"},"max_delete":{"type":"integer","default":5}},"required":["query"]}},
     {"name":"memory_consolidate","description":"Trigger memory consolidation — deduplicates, merges similar memories, prunes stale entries.","inputSchema":{"type":"object","properties":{"agent_id":{"type":"string"},"dedup_threshold":{"type":"number","default":0.85}},"required":[]}},
+    {"name":"session_start","description":"Start a raw Nexus session archive.","inputSchema":{"type":"object","properties":{"agent_id":{"type":"string"},"project_key":{"type":"string"},"title":{"type":"string"},"metadata":{"type":"object"}},"required":[]}},
+    {"name":"session_append","description":"Append a raw message/event to a Nexus session archive.","inputSchema":{"type":"object","properties":{"session_id":{"type":"string"},"role":{"type":"string"},"content":{"type":"string"},"token_estimate":{"type":"integer"},"metadata":{"type":"object"}},"required":["session_id","content"]}},
+    {"name":"session_end","description":"End a raw Nexus session archive and optionally save a durable summary.","inputSchema":{"type":"object","properties":{"session_id":{"type":"string"},"summary":{"type":"string"},"durable":{"type":"boolean"},"metadata":{"type":"object"}},"required":["session_id"]}},
+    {"name":"session_get","description":"Get a Nexus session archive with messages.","inputSchema":{"type":"object","properties":{"session_id":{"type":"string"},"limit":{"type":"integer","default":200}},"required":["session_id"]}},
+    {"name":"session_list","description":"List recent Nexus sessions.","inputSchema":{"type":"object","properties":{"agent_id":{"type":"string"},"project_key":{"type":"string"},"limit":{"type":"integer","default":50}},"required":[]}},
     {"name":"memory_context_reconstruct","description":"Reconstruct full session context from memory — groups results by type (active_work, decisions, preferences, facts).","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"agent_id":{"type":"string"},"limit":{"type":"integer","default":20}},"required":["query"]}},
     {"name":"memory_handoff","description":"Leave a handoff note for peer agents via Nexus. The note persists and is retrievable by any agent.","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"target_agent":{"type":"string","description":"Agent ID the note is for (or 'all')"},"agent_id":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}}},"required":["content","target_agent"]}},
 ]
@@ -113,6 +118,52 @@ def call_tool(name, args):
         threshold = float(args.get("dedup_threshold", 0.85))
         d = request("POST", "/v1/memory/consolidate", {"agent_id": args["agent_id"], "dedup_threshold": threshold})
         return text_result(json.dumps(d, indent=2))
+    if name == "session_start":
+        payload = {
+            "agent_id": args.get("agent_id", DEFAULT_AGENT_ID),
+            "project_key": args.get("project_key"),
+            "title": args.get("title"),
+            "metadata": args.get("metadata", {}),
+        }
+        d = request("POST", "/v1/sessions/start", payload)
+        return text_result(f"Session started: {d['session_id']} agent={d['agent_id']} started_at={d['started_at']}")
+    if name == "session_append":
+        sid = args.get("session_id", "")
+        d = request("POST", f"/v1/sessions/{sid}/messages", {
+            "role": args.get("role", "event"),
+            "content": args.get("content", ""),
+            "token_estimate": args.get("token_estimate"),
+            "metadata": args.get("metadata", {}),
+        })
+        return text_result(f"Session message appended: {d['message_id']} tokens≈{d['token_estimate']}")
+    if name == "session_end":
+        sid = args.get("session_id", "")
+        d = request("POST", f"/v1/sessions/{sid}/end", {
+            "summary": args.get("summary"),
+            "durable": args.get("durable", False),
+            "metadata": args.get("metadata", {}),
+        })
+        msg = f"Session ended: {d['session_id']}"
+        if d.get("memory_id"):
+            msg += f"; durable summary memory={d['memory_id']}"
+        return text_result(msg)
+    if name == "session_get":
+        sid = args.get("session_id", "")
+        limit = int(args.get("limit", 200))
+        return text_result(json.dumps(request("GET", f"/v1/sessions/{sid}?limit={limit}"), indent=2))
+    if name == "session_list":
+        params = [f"limit={int(args.get('limit', 50))}"]
+        if args.get("agent_id"):
+            params.append(f"agent_id={args['agent_id']}")
+        if args.get("project_key"):
+            params.append(f"project_key={args['project_key']}")
+        sessions = request("GET", "/v1/sessions?" + "&".join(params))
+        if not sessions:
+            return text_result("No sessions found.")
+        lines = [f"Sessions ({len(sessions)}):"]
+        for s in sessions:
+            lines.append(f"  {s['id']} agent={s['agent_id']} project={s.get('project_key') or '-'} messages={s.get('message_count', 0)} ended={s.get('ended_at') or 'active'}")
+        return text_result("\n".join(lines))
     if name == "memory_context_reconstruct":
         query = args.get("query", "")
         limit = int(args.get("limit", 20))

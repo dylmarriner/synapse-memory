@@ -2,6 +2,7 @@
 
 import uuid
 from typing import Optional
+from datetime import datetime, timezone
 from fastapi import APIRouter, Request, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +27,13 @@ class RelationItem(BaseModel):
 
 class RelationsRequest(BaseModel):
     relations: list[RelationItem] = Field(default_factory=list)
+
+class AgentUpdateRequest(BaseModel):
+    """Update agent metadata for registry enhancement."""
+    model: Optional[str] = None
+    capabilities: Optional[list[str]] = None
+    last_active: Optional[datetime] = None
+
 from app.agents.peer import get_or_create
 from app.agents.context import get_context
 from app.memory.ingest import save_memory
@@ -250,4 +258,117 @@ async def blast_radius(
         "changed_files": file_list,
         "impacted": [{"id": k, "name": v} for k, v in visited.items()],
         "depth_reached": depth,
+    }
+
+
+@router.post("/{agent_id}/update")
+async def update_agent_metadata(
+    agent_id: str,
+    body: AgentUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update agent registry fields (model, capabilities, last_active) and increment session count."""
+    await get_or_create(db, agent_id)
+    
+    updates = []
+    params = {"agent_id": agent_id}
+    
+    if body.model is not None:
+        updates.append("model = :model")
+        params["model"] = body.model
+    
+    if body.capabilities is not None:
+        updates.append("metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('capabilities', :capabilities)")
+        params["capabilities"] = body.capabilities
+    
+    if body.last_active is not None:
+        updates.append("last_active = :last_active")
+        params["last_active"] = body.last_active
+    else:
+        # Auto-update last_active if not provided
+        updates.append("last_active = NOW()")
+    
+    # Always increment session count on update
+    updates.append("session_count = session_count + 1")
+    
+    if updates:
+        query = f"""
+            UPDATE agents 
+            SET {', '.join(updates)}
+            WHERE name = :agent_id
+            RETURNING id, name, model, session_count, last_active, metadata
+        """
+        result = await db.execute(text(query), params)
+        await db.commit()
+        row = result.fetchone()
+        if row:
+            return {
+                "id": str(row.id),
+                "name": row.name,
+                "model": row.model,
+                "session_count": row.session_count,
+                "last_active": row.last_active.isoformat() if row.last_active else None,
+                "metadata": row.metadata or {},
+            }
+    
+    return {"success": False, "message": "Agent not found"}
+
+
+@router.get("/discover")
+async def discover_agents(
+    model: Optional[str] = Query(default=None),
+    active_within_hours: int = Query(default=24, ge=1, le=720),
+    min_sessions: int = Query(default=0, ge=0),
+    db: AsyncSession = Depends(get_db),
+):
+    """Discover agents by model, recent activity, and session count for multi-agent architectures."""
+    
+    conditions = []
+    params = {"hours": active_within_hours, "min_sessions": min_sessions}
+    
+    # Filter by recent activity
+    conditions.append("last_active > NOW() - (INTERVAL '1 hour' * :hours)")
+    
+    # Filter by minimum session count
+    if min_sessions > 0:
+        conditions.append("session_count >= :min_sessions")
+    
+    # Filter by model if specified
+    if model:
+        conditions.append("model = :model")
+        params["model"] = model
+    
+    where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+    
+    query = f"""
+        SELECT id, name, model, session_count, last_active, metadata, created_at
+        FROM agents
+        {where_clause}
+        ORDER BY last_active DESC, session_count DESC
+        LIMIT 50
+    """
+    
+    result = await db.execute(text(query), params)
+    agents = []
+    for row in result.fetchall():
+        metadata = dict(row.metadata or {})
+        agents.append({
+            "id": str(row.id),
+            "name": row.name,
+            "model": row.model,
+            "session_count": row.session_count,
+            "last_active": row.last_active.isoformat() if row.last_active else None,
+            "capabilities": metadata.get("capabilities", []),
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "metadata": metadata,
+        })
+    
+    return {
+        "agents": agents,
+        "total": len(agents),
+        "filters": {
+            "model": model,
+            "active_within_hours": active_within_hours,
+            "min_sessions": min_sessions,
+        }
     }

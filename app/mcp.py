@@ -222,6 +222,54 @@ TOOLS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "session_start",
+        "description": "Start a raw Nexus session archive for this agent/task. Use before substantial work so messages/events can be appended with provenance.",
+        "inputSchema": {"type": "object", "properties": {
+            "agent_id": {"type": "string", "default": "default"},
+            "project_key": {"type": "string"},
+            "title": {"type": "string", "maxLength": 500},
+            "metadata": {"type": "object"},
+        }, "required": []},
+    },
+    {
+        "name": "session_append",
+        "description": "Append a raw message/event to a Nexus session archive. Use for user prompts, assistant summaries, tool results, and important events.",
+        "inputSchema": {"type": "object", "properties": {
+            "session_id": {"type": "string"},
+            "role": {"type": "string", "default": "event"},
+            "content": {"type": "string"},
+            "token_estimate": {"type": "integer", "minimum": 0},
+            "metadata": {"type": "object"},
+        }, "required": ["session_id", "content"]},
+    },
+    {
+        "name": "session_end",
+        "description": "End a Nexus raw session archive. Optionally save a durable session summary memory linked to the session as provenance.",
+        "inputSchema": {"type": "object", "properties": {
+            "session_id": {"type": "string"},
+            "summary": {"type": "string"},
+            "durable": {"type": "boolean", "default": false},
+            "metadata": {"type": "object"},
+        }, "required": ["session_id"]},
+    },
+    {
+        "name": "session_get",
+        "description": "Get a Nexus session archive with recent messages.",
+        "inputSchema": {"type": "object", "properties": {
+            "session_id": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 200},
+        }, "required": ["session_id"]},
+    },
+    {
+        "name": "session_list",
+        "description": "List recent Nexus raw sessions, optionally filtered by agent or project.",
+        "inputSchema": {"type": "object", "properties": {
+            "agent_id": {"type": "string"},
+            "project_key": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+        }, "required": []},
+    },
     # ── sys_core-compatible sys_core_* tools ─────────────────────────────────
     # These are the same tool names Nexus uses so any Nexus-aware agent
     # works natively against Nexus without reconfiguration.
@@ -1063,14 +1111,86 @@ async def _dispatch(tool: str, args: dict, request: Request) -> str:
                     lines.append(f"  [{m['memory_type']}] imp={m['importance']:.2f}{trust}  {m['content'][:200]}")
             return "\n".join(lines)
 
+        elif tool == "session_start":
+            r = await client.post(f"{base}/v1/sessions/start", json={
+                "agent_id": args.get("agent_id", "default"),
+                "project_key": args.get("project_key"),
+                "title": args.get("title"),
+                "metadata": args.get("metadata", {}),
+            }, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+            return f"Session started: {d['session_id']} agent={d['agent_id']} started_at={d['started_at']}"
+
+        elif tool == "session_append":
+            session_id = args.get("session_id", "")
+            r = await client.post(f"{base}/v1/sessions/{session_id}/messages", json={
+                "role": args.get("role", "event"),
+                "content": args.get("content", ""),
+                "token_estimate": args.get("token_estimate"),
+                "metadata": args.get("metadata", {}),
+            }, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+            return f"Session message appended: {d['message_id']} tokens≈{d['token_estimate']}"
+
+        elif tool == "session_end":
+            session_id = args.get("session_id", "")
+            r = await client.post(f"{base}/v1/sessions/{session_id}/end", json={
+                "summary": args.get("summary"),
+                "durable": args.get("durable", False),
+                "metadata": args.get("metadata", {}),
+            }, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+            msg = f"Session ended: {d['session_id']}"
+            if d.get("memory_id"):
+                msg += f"; durable summary memory={d['memory_id']}"
+            return msg
+
+        elif tool == "session_get":
+            session_id = args.get("session_id", "")
+            r = await client.get(f"{base}/v1/sessions/{session_id}", params={"limit": args.get("limit", 200)}, headers=headers)
+            r.raise_for_status()
+            return json.dumps(r.json(), indent=2)
+
+        elif tool == "session_list":
+            params = {"limit": args.get("limit", 50)}
+            if args.get("agent_id"):
+                params["agent_id"] = args.get("agent_id")
+            if args.get("project_key"):
+                params["project_key"] = args.get("project_key")
+            r = await client.get(f"{base}/v1/sessions", params=params, headers=headers)
+            r.raise_for_status()
+            sessions = r.json()
+            if not sessions:
+                return "No sessions found."
+            lines = [f"Sessions ({len(sessions)}):"]
+            for s in sessions:
+                ended = s.get("ended_at") or "active"
+                lines.append(f"  {s['id']} agent={s['agent_id']} project={s.get('project_key') or '-'} messages={s.get('message_count', 0)} ended={ended}")
+            return "\n".join(lines)
+
         elif tool == "memory_extract_session":
             from app.memory.session import extract_session_facts
             messages = args.get("messages", [])
             agent_id = args.get("agent_id", "default")
+            session_id = args.get("session_id")
+            source_message_ids = []
+            if session_id and not messages:
+                sr = await client.get(f"{base}/v1/sessions/{session_id}", params={"limit": args.get("limit", 200)}, headers=headers)
+                sr.raise_for_status()
+                sd = sr.json()
+                messages = sd.get("messages", [])
+                agent_id = args.get("agent_id") or sd.get("agent_id", agent_id)
+                source_message_ids = [m.get("id") for m in messages if m.get("id")]
+            else:
+                source_message_ids = [m.get("id") for m in messages if isinstance(m, dict) and m.get("id")]
             extractions = await extract_session_facts(messages, agent_id)
             if not extractions:
                 return "No durable facts extracted from this session."
             saved = 0
+            linked = 0
             for ext in extractions:
                 try:
                     r = await client.post(f"{base}/v1/memory/save", json={
@@ -1079,13 +1199,27 @@ async def _dispatch(tool: str, args: dict, request: Request) -> str:
                         "memory_type": ext.get("type", "observation"),
                         "importance": ext.get("importance", 0.6),
                         "tags": ["session-extract"],
-                        "metadata": {"source": "session-extraction"},
+                        "metadata": {"source": "session-extraction", "session_id": session_id, "source_message_ids": source_message_ids[:50]},
                     }, headers=headers)
                     r.raise_for_status()
+                    saved_memory = r.json()
+                    memory_id = saved_memory.get("id")
                     saved += 1
+                    for mid in source_message_ids[:50]:
+                        try:
+                            lr = await client.post(f"{base}/v1/sessions/sources/link", json={
+                                "memory_id": memory_id,
+                                "source_kind": "message",
+                                "source_id": mid,
+                                "metadata": {"session_id": session_id, "extract_type": ext.get("type", "observation")},
+                            }, headers=headers)
+                            if lr.status_code < 400:
+                                linked += 1
+                        except Exception:
+                            pass
                 except Exception:
                     pass
-            lines = [f"Extracted and saved {saved} facts from session:"]
+            lines = [f"Extracted and saved {saved} facts from session. Provenance links: {linked}"]
             for ext in extractions:
                 lines.append(f"  [{ext.get('type', '?')}] {ext['content'][:200]}")
             return "\n".join(lines)

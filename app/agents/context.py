@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.api import MemoryResult, AgentContextResponse
+from app.config import settings
 
 log = logging.getLogger("nexus.agents.context")
 
@@ -49,9 +50,10 @@ async def get_context(
         pass
 
     # Conclusions become explicit prompt rules so agents act on them.
+    conclusion_limit = max(1, settings.context_conclusion_limit)
     c_rows = await db.execute(
-        text("SELECT content FROM conclusions WHERE agent_id = CAST(:id AS uuid) ORDER BY created_at DESC LIMIT 15"),
-        {"id": str(agent_id)},
+        text("SELECT content FROM conclusions WHERE agent_id = CAST(:id AS uuid) ORDER BY created_at DESC LIMIT :limit"),
+        {"id": str(agent_id), "limit": conclusion_limit},
     )
     conclusions = [f"REMEMBER: {r.content}" for r in c_rows.fetchall()]
     budget -= sum(len(c) for c in conclusions)
@@ -102,16 +104,20 @@ async def get_context(
                     END,
                     importance DESC,
                     created_at DESC
-                LIMIT 40
+                LIMIT :limit
             """),
-            {"id": str(agent_id)},
+            {"id": str(agent_id), "limit": max(1, settings.context_memory_limit)},
         )
         for r in m_rows.fetchall():
             if budget <= 0:
                 break
+            content = r.content
+            char_limit = max(80, settings.context_memory_char_limit)
+            if len(content) > char_limit:
+                content = content[:char_limit].rstrip() + "…"
             memories.append(MemoryResult(
                 id=str(r.id),
-                content=r.content,
+                content=content,
                 score=float(r.importance),
                 memory_type=r.memory_type,
                 agent_id=agent_name,
@@ -121,7 +127,7 @@ async def get_context(
                 created_at=r.created_at,
                 metadata=r.metadata or {},
             ))
-            budget -= len(r.content)
+            budget -= len(content)
 
     e_row = await db.execute(
         text("SELECT COUNT(*) AS cnt FROM entities WHERE agent_id = CAST(:id AS uuid)"),

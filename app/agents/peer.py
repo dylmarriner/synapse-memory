@@ -74,7 +74,7 @@ async def build_representation(db: AsyncSession, agent_name: str) -> Optional[st
             SELECT c.content FROM conclusions c
             JOIN agents a ON c.agent_id = a.id
             WHERE a.name = :name
-            ORDER BY c.created_at DESC LIMIT 20
+            ORDER BY c.created_at DESC LIMIT 10
         """), {"name": agent_name})
         conclusions = [r.content for r in c_rows.fetchall()]
 
@@ -82,9 +82,9 @@ async def build_representation(db: AsyncSession, agent_name: str) -> Optional[st
             SELECT m.content, m.memory_type FROM memories m
             JOIN agents a ON m.agent_id = a.id
             WHERE a.name = :name
-            ORDER BY m.importance DESC, m.access_count DESC, m.created_at DESC LIMIT 15
+            ORDER BY m.importance DESC, m.access_count DESC, m.created_at DESC LIMIT 10
         """), {"name": agent_name})
-        memories = [f"[{r.memory_type}] {r.content}" for r in m_rows.fetchall()]
+        memories = [f"[{r.memory_type}] {r.content[:400]}" for r in m_rows.fetchall()]
 
         if not conclusions and not memories:
             return None
@@ -96,7 +96,7 @@ async def build_representation(db: AsyncSession, agent_name: str) -> Optional[st
                 conclusions="\n".join(f"- {c}" for c in conclusions) or "(none yet)",
                 memories="\n".join(f"- {m}" for m in memories) or "(none yet)",
             )}],
-            max_tokens=250,
+            max_tokens=min(180, settings.llm_summary_max_tokens),
             temperature=0.2,
         )
         representation = resp.choices[0].message.content.strip()

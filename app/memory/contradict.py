@@ -73,9 +73,9 @@ async def detect_contradictions(
             resp = await llm.chat.completions.create(
                 model=settings.llm_model,
                 messages=[{"role": "user", "content": _CONTRADICT_PROMPT.format(
-                    new_content=new_content[:500], old_content=candidate.content[:500]
+                    new_content=new_content[:350], old_content=candidate.content[:350]
                 )}],
-                max_tokens=100,
+                max_tokens=80,
                 temperature=0,
             )
             raw = (resp.choices[0].message.content or "").strip()
