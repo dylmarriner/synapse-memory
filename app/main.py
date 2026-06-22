@@ -55,6 +55,7 @@ from app.routers.sessions import router as sessions_router
 from app.mcp import mcp_router
 from app.routers.sys_bridge import router as sys_bridge_router
 from app.routers.synapse import router as synapse_router
+from app.routers.compat import router as compat_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -329,6 +330,7 @@ app.include_router(sessions_router, prefix="/v1/sessions", tags=["sessions"], de
 app.include_router(mcp_router,        prefix="/mcp",           tags=["mcp"],        dependencies=[Depends(_verify_key)])
 app.include_router(sys_bridge_router,  prefix="/v1/sys",  tags=["sys"],  dependencies=[Depends(_verify_key)])
 app.include_router(synapse_router, prefix="/v1/synapse", tags=["synapse"], dependencies=[Depends(_verify_key)])
+app.include_router(compat_router, prefix="/v1", tags=["compat"], dependencies=[Depends(_verify_key)])
 
 
 @app.get("/.well-known/nexus/openapi.json", include_in_schema=False)

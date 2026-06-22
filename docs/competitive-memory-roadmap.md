@@ -282,6 +282,10 @@ Expose aliases/client adapters:
 - BrainSync-style: local project context/rules endpoint.
 - AgentMemory-style MCP and coding-agent install scripts.
 
+Initial compatibility aliases are implemented for Hindsight-style
+`/v1/retain`, `/v1/recall`, `/v1/reflect`, Honcho-style peer context/card hints,
+and AgentMemory-style health discovery.
+
 ### Phase 8 — Universal agent/IDE auto-connect
 
 Turn Nexus Doctor into a universal connector for local AI agents, IDEs, desktop
