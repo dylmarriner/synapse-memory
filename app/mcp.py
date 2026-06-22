@@ -249,7 +249,7 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {
             "session_id": {"type": "string"},
             "summary": {"type": "string"},
-            "durable": {"type": "boolean", "default": false},
+            "durable": {"type": "boolean", "default": False},
             "metadata": {"type": "object"},
         }, "required": ["session_id"]},
     },
