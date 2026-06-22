@@ -253,6 +253,107 @@ async def rtk_metrics(db: AsyncSession = Depends(get_db)):
         }
 
 
+@router.get("/admin/rtk/summary")
+async def rtk_summary(db: AsyncSession = Depends(get_db)):
+    """Richer RTK command telemetry for dashboard cards and troubleshooting."""
+    summary_row = (await db.execute(text("""
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE COALESCE((detail::jsonb->>'exit_code')::int, 0) != 0) AS failures,
+               COALESCE(SUM(COALESCE((detail::jsonb->>'tokens_saved_estimate')::int, 0)), 0) AS tokens_saved,
+               COALESCE(AVG(COALESCE((detail::jsonb->>'duration_ms')::int, 0)), 0) AS avg_duration_ms,
+               COALESCE(MAX(COALESCE((detail::jsonb->>'duration_ms')::int, 0)), 0) AS max_duration_ms
+        FROM events
+        WHERE action = 'rtk.command'
+    """))).fetchone()
+
+    by_agent_rows = await db.execute(text("""
+        SELECT actor AS agent_id,
+               COUNT(*) AS count,
+               COALESCE(SUM(COALESCE((detail::jsonb->>'tokens_saved_estimate')::int, 0)), 0) AS tokens_saved,
+               COUNT(*) FILTER (WHERE COALESCE((detail::jsonb->>'exit_code')::int, 0) != 0) AS failures
+        FROM events
+        WHERE action = 'rtk.command'
+        GROUP BY actor
+        ORDER BY tokens_saved DESC, count DESC
+        LIMIT 20
+    """))
+
+    failing_rows = await db.execute(text("""
+        SELECT COALESCE(detail::jsonb->>'command_label', 'unknown') AS command_label,
+               COUNT(*) AS failures
+        FROM events
+        WHERE action = 'rtk.command'
+          AND COALESCE((detail::jsonb->>'exit_code')::int, 0) != 0
+        GROUP BY command_label
+        ORDER BY failures DESC
+        LIMIT 20
+    """))
+
+    duration_rows = await db.execute(text("""
+        SELECT COALESCE(detail::jsonb->>'command_label', 'unknown') AS command_label,
+               COUNT(*) AS count,
+               COALESCE(AVG(COALESCE((detail::jsonb->>'duration_ms')::int, 0)), 0) AS avg_duration_ms,
+               COALESCE(MAX(COALESCE((detail::jsonb->>'duration_ms')::int, 0)), 0) AS max_duration_ms
+        FROM events
+        WHERE action = 'rtk.command'
+        GROUP BY command_label
+        ORDER BY avg_duration_ms DESC
+        LIMIT 20
+    """))
+
+    return {
+        "total_events": int(summary_row.total or 0),
+        "failures": int(summary_row.failures or 0),
+        "tokens_saved_estimate": int(summary_row.tokens_saved or 0),
+        "avg_duration_ms": float(summary_row.avg_duration_ms or 0.0),
+        "max_duration_ms": int(summary_row.max_duration_ms or 0),
+        "by_agent": [{
+            "agent_id": r.agent_id,
+            "count": int(r.count or 0),
+            "tokens_saved_estimate": int(r.tokens_saved or 0),
+            "failures": int(r.failures or 0),
+        } for r in by_agent_rows.fetchall()],
+        "top_failing_commands": [{
+            "command_label": r.command_label,
+            "failures": int(r.failures or 0),
+        } for r in failing_rows.fetchall()],
+        "slowest_commands": [{
+            "command_label": r.command_label,
+            "count": int(r.count or 0),
+            "avg_duration_ms": float(r.avg_duration_ms or 0.0),
+            "max_duration_ms": int(r.max_duration_ms or 0),
+        } for r in duration_rows.fetchall()],
+    }
+
+
+@router.get("/admin/rtk/timeseries")
+async def rtk_timeseries(days: int = 14, db: AsyncSession = Depends(get_db)):
+    """Daily RTK savings/failure telemetry for charts."""
+    days = max(1, min(days, 90))
+    rows = await db.execute(text("""
+        SELECT date_trunc('day', created_at) AS day,
+               COUNT(*) AS events,
+               COUNT(*) FILTER (WHERE COALESCE((detail::jsonb->>'exit_code')::int, 0) != 0) AS failures,
+               COALESCE(SUM(COALESCE((detail::jsonb->>'tokens_saved_estimate')::int, 0)), 0) AS tokens_saved,
+               COALESCE(AVG(COALESCE((detail::jsonb->>'duration_ms')::int, 0)), 0) AS avg_duration_ms
+        FROM events
+        WHERE action = 'rtk.command'
+          AND created_at >= NOW() - (:days * INTERVAL '1 day')
+        GROUP BY day
+        ORDER BY day ASC
+    """), {"days": days})
+    return {
+        "days": days,
+        "points": [{
+            "day": r.day.date().isoformat() if r.day else None,
+            "events": int(r.events or 0),
+            "failures": int(r.failures or 0),
+            "tokens_saved_estimate": int(r.tokens_saved or 0),
+            "avg_duration_ms": float(r.avg_duration_ms or 0.0),
+        } for r in rows.fetchall()],
+    }
+
+
 async def _memory_jsonl(db: AsyncSession, agent_id: str | None = None):
     where = ""
     params = {}

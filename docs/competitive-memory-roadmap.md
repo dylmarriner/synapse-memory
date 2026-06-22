@@ -314,7 +314,8 @@ High-priority connector targets are tracked in `docs/agent-target-registry.md`.
 6. Add `/v1/admin/metrics` and RTK gain capture. Initial dashboard metrics
    endpoint implemented; RTK event capture is active via `/v1/rtk/events`.
 7. Expand `/v1/rtk/events` into dashboard-visible command telemetry and optional
-   hook/proxy integration for agents that support command wrappers.
+   hook/proxy integration for agents that support command wrappers. Added RTK
+   summary and timeseries admin endpoints for dashboard cards/charts.
 8. Expand Nexus Doctor using `docs/agent-target-registry.md`: Gemini CLI, Qwen
    Code, Codex CLI, Goose, Continue, Aider, Roo/Kilo/Kade variants, project
    instruction files, OpenHands/SWE-agent env templates, and OpenAPI templates
