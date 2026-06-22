@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_db
 from pydantic import BaseModel, Field
-from app.models.api import AgentLearnRequest, MemorySaveRequest, MemorySaveResponse, AgentContextResponse, AgentTransferResponse
+from app.models.api import AgentLearnRequest, MemorySaveRequest, MemorySaveResponse, AgentContextResponse, AgentTransferResponse, AgentCardResponse, MemoryResult
 
 
 class EntityItem(BaseModel):
@@ -51,6 +51,112 @@ async def agent_context(
 ):
     await get_or_create(db, agent_id)
     return await get_context(db, agent_id, token_budget=tokens, search_query=search_query)
+
+
+@router.get("/{agent_id}/card", response_model=AgentCardResponse)
+async def agent_card(agent_id: str, db: AsyncSession = Depends(get_db)):
+    """Honcho-style peer/agent card with profile, confidence, stats, and sources."""
+    await get_or_create(db, agent_id)
+
+    agent_row = (await db.execute(text("""
+        SELECT id, name, model, last_active, session_count, metadata, representation
+        FROM agents
+        WHERE name = :agent_id
+    """), {"agent_id": agent_id})).fetchone()
+    if not agent_row:
+        return AgentCardResponse(agent_id=agent_id, display_name=agent_id)
+
+    stats = (await db.execute(text("""
+        SELECT COUNT(*) AS memory_count,
+               COALESCE(AVG(m.importance), 0) AS avg_importance,
+               COALESCE(SUM(m.confirmed_count), 0) AS confirmed_count,
+               COALESCE(SUM(m.contradicted_count), 0) AS contradicted_count
+        FROM memories m
+        WHERE m.agent_id = :aid
+    """), {"aid": agent_row.id})).fetchone()
+
+    entity_count = (await db.execute(text("SELECT COUNT(*) FROM entities WHERE agent_id = :aid"), {"aid": agent_row.id})).scalar() or 0
+    conclusion_count = (await db.execute(text("SELECT COUNT(*) FROM conclusions WHERE agent_id = :aid"), {"aid": agent_row.id})).scalar() or 0
+    summary_count = (await db.execute(text("SELECT COUNT(*) FROM summaries WHERE agent_id = :aid"), {"aid": agent_row.id})).scalar() or 0
+
+    type_rows = await db.execute(text("""
+        SELECT memory_type, COUNT(*) AS count
+        FROM memories
+        WHERE agent_id = :aid
+        GROUP BY memory_type
+        ORDER BY count DESC
+    """), {"aid": agent_row.id})
+    top_memory_types = {r.memory_type: int(r.count) for r in type_rows.fetchall()}
+
+    source_rows = await db.execute(text("""
+        SELECT ms.source_kind, COUNT(*) AS count
+        FROM memory_sources ms
+        JOIN memories m ON m.id = ms.memory_id
+        WHERE m.agent_id = :aid
+        GROUP BY ms.source_kind
+        ORDER BY count DESC
+    """), {"aid": agent_row.id})
+    source_counts = {r.source_kind: int(r.count) for r in source_rows.fetchall()}
+
+    conclusion_rows = await db.execute(text("""
+        SELECT content FROM conclusions
+        WHERE agent_id = :aid
+        ORDER BY created_at DESC
+        LIMIT 8
+    """), {"aid": agent_row.id})
+    conclusions = [r.content for r in conclusion_rows.fetchall()]
+
+    memory_rows = await db.execute(text("""
+        SELECT m.id, m.content, m.memory_type, m.importance, m.access_count,
+               m.confirmed_count, m.contradicted_count, m.created_at, m.metadata,
+               a.name AS agent_name
+        FROM memories m
+        LEFT JOIN agents a ON a.id = m.agent_id
+        WHERE m.agent_id = :aid
+        ORDER BY m.importance DESC, m.created_at DESC
+        LIMIT 8
+    """), {"aid": agent_row.id})
+    recent_memories = [MemoryResult(
+        id=str(r.id), content=r.content, score=float(r.importance or 0.0),
+        memory_type=r.memory_type, agent_id=str(agent_row.id), agent_name=r.agent_name,
+        importance=float(r.importance or 0.0), access_count=r.access_count or 0,
+        confirmed_count=r.confirmed_count or 0, contradicted_count=r.contradicted_count or 0,
+        created_at=r.created_at, metadata=dict(r.metadata or {}), matched_by=["agent-card"],
+    ) for r in memory_rows.fetchall()]
+
+    metadata = dict(agent_row.metadata or {})
+    memory_count = int(stats.memory_count or 0)
+    confirmed = int(stats.confirmed_count or 0)
+    contradicted = int(stats.contradicted_count or 0)
+    # Confidence combines evidence volume, representation, confirmations, and contradiction penalty.
+    volume_score = min(0.45, memory_count / 100 * 0.45)
+    representation_score = 0.2 if agent_row.representation else 0.0
+    conclusion_score = min(0.15, conclusion_count / 10 * 0.15)
+    trust_score = min(0.2, confirmed / max(memory_count, 1) * 0.2) - min(0.25, contradicted / max(memory_count, 1) * 0.25)
+    confidence = round(max(0.0, min(1.0, volume_score + representation_score + conclusion_score + trust_score)), 3)
+
+    return AgentCardResponse(
+        agent_id=agent_id,
+        display_name=metadata.get("display_name") or agent_row.name,
+        model=agent_row.model,
+        last_active=agent_row.last_active,
+        session_count=agent_row.session_count or 0,
+        memory_count=memory_count,
+        entity_count=int(entity_count),
+        conclusion_count=int(conclusion_count),
+        summary_count=int(summary_count),
+        confirmed_count=confirmed,
+        contradicted_count=contradicted,
+        avg_importance=float(stats.avg_importance or 0.0),
+        top_memory_types=top_memory_types,
+        capabilities=list(metadata.get("capabilities") or []),
+        representation=agent_row.representation,
+        recent_memories=recent_memories,
+        conclusions=conclusions,
+        source_counts=source_counts,
+        confidence=confidence,
+        metadata=metadata,
+    )
 
 
 @router.post("/{agent_id}/learn", response_model=MemorySaveResponse)

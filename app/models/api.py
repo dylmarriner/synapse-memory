@@ -91,6 +91,30 @@ class AgentContextResponse(BaseModel):
     recent_memories: List[MemoryResult] = Field(default_factory=list)
     conclusions: List[str] = Field(default_factory=list)
     entity_count: int = 0
+    summaries: List[str] = Field(default_factory=list)
+
+
+class AgentCardResponse(BaseModel):
+    agent_id: str
+    display_name: str
+    model: Optional[str] = None
+    last_active: Optional[datetime] = None
+    session_count: int = 0
+    memory_count: int = 0
+    entity_count: int = 0
+    conclusion_count: int = 0
+    summary_count: int = 0
+    confirmed_count: int = 0
+    contradicted_count: int = 0
+    avg_importance: float = 0.0
+    top_memory_types: Dict[str, int] = Field(default_factory=dict)
+    capabilities: List[str] = Field(default_factory=list)
+    representation: Optional[str] = None
+    recent_memories: List[MemoryResult] = Field(default_factory=list)
+    conclusions: List[str] = Field(default_factory=list)
+    source_counts: Dict[str, int] = Field(default_factory=dict)
+    confidence: float = 0.0
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class HealthResponse(BaseModel):

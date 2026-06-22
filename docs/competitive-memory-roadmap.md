@@ -310,6 +310,7 @@ High-priority connector targets are tracked in `docs/agent-target-registry.md`.
 4. Link extracted memories back to source messages. Initial `memory_sources`
    linking implemented for session extraction.
 5. Add `/v1/agents/{id}/card` using existing summaries/conclusions/memories.
+   Implemented initial Honcho-style agent card endpoint.
 6. Add `/v1/admin/metrics` and RTK gain capture.
 7. Expand `/v1/rtk/events` into dashboard-visible command telemetry and optional
    hook/proxy integration for agents that support command wrappers.
