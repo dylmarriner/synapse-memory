@@ -355,6 +355,122 @@ async def recent_activity(
     return {"project_key": key, "count": len(events), "events": events}
 
 
+# ── Project rules ingestion (Phase 3 / BrainSync parity) ────────────────────
+
+_RULE_FILES = [
+    "CLAUDE.md", "AGENTS.md", "GEMINI.md", "QWEN.md",
+    ".cursorrules", ".windsurfrules", ".clinerules",
+    ".github/copilot-instructions.md",
+]
+
+
+@router.post("/projects/{project_key}/index-rules")
+async def index_project_rules(
+    project_key: str,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Ingest project rule/instruction files into the file index.
+
+    Accepts ``{"root": "/abs/path/to/project"}`` and walks known rule file names.
+    Returns a summary of which files were indexed or skipped.
+    """
+    key = _normalize_key(project_key)
+    root_str = body.get("root") or body.get("path") or ""
+    if not root_str:
+        return {"indexed": 0, "skipped": 0, "files": [], "error": "root path required"}
+
+    root = Path(root_str).expanduser().resolve()
+    if not root.is_dir():
+        return {"indexed": 0, "skipped": 0, "files": [], "error": f"not a directory: {root}"}
+
+    await _ensure_project(db, key, name=body.get("name"))
+    # Optionally persist root on the project record
+    await db.execute(
+        text("UPDATE projects SET root = :root WHERE key = :key"),
+        {"root": str(root), "key": key},
+    )
+
+    indexed, skipped = 0, 0
+    results = []
+    now = datetime.now(timezone.utc)
+
+    for rel in _RULE_FILES:
+        path = root / rel
+        if not path.exists():
+            skipped += 1
+            continue
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+            sha = hashlib.sha256(content.encode()).hexdigest()
+            symbols = _extract_symbols(content)
+            summary = content[:500].replace("\n", " ")
+            await db.execute(text("""
+                INSERT INTO file_index (id, project_key, path, sha256, size, language, summary, symbols, updated_at)
+                VALUES (gen_random_uuid(), :pk, :path, :sha, :size, :lang, :summary, CAST(:symbols AS jsonb), :now)
+                ON CONFLICT (project_key, path) DO UPDATE SET
+                    sha256 = :sha, size = :size, summary = :summary, symbols = CAST(:symbols AS jsonb), updated_at = :now
+            """), {
+                "pk": key,
+                "path": rel,
+                "sha": sha,
+                "size": len(content.encode()),
+                "lang": "markdown",
+                "summary": summary,
+                "symbols": json.dumps(symbols),
+                "now": now,
+            })
+            results.append({"path": rel, "status": "indexed", "size": len(content.encode())})
+            indexed += 1
+        except Exception as e:
+            results.append({"path": rel, "status": "error", "error": str(e)})
+            skipped += 1
+
+    await db.commit()
+    return {"project_key": key, "indexed": indexed, "skipped": skipped, "files": results}
+
+
+@router.get("/projects/{project_key}/rules")
+async def get_project_rules(
+    project_key: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return indexed rule/instruction files for a project.
+
+    Used by agents to load the project's coding rules, style guides, and
+    instruction files into context (BrainSync-style project awareness).
+    """
+    key = _normalize_key(project_key)
+    rows = await db.execute(text("""
+        SELECT path, language, summary, symbols, size, updated_at
+        FROM file_index
+        WHERE project_key = :pk
+          AND path = ANY(:rule_paths)
+        ORDER BY updated_at DESC
+    """), {"pk": key, "rule_paths": _RULE_FILES})
+    files = [dict(r._mapping) for r in rows.fetchall()]
+
+    # Also fetch full content for small rule files from the project root if available
+    project_row = (await db.execute(
+        text("SELECT root FROM projects WHERE key = :key"), {"key": key}
+    )).fetchone()
+    root = Path(project_row.root) if project_row and project_row.root else None
+
+    enriched = []
+    for f in files:
+        entry = dict(f)
+        if root:
+            full_path = root / f["path"]
+            try:
+                content = full_path.read_text(encoding="utf-8", errors="replace")
+                entry["content"] = content[:20_000]
+            except Exception:
+                pass
+        enriched.append(entry)
+
+    return {"project_key": key, "count": len(enriched), "rules": enriched}
+
+
 # ── Health ───────────────────────────────────────────────────────────────────
 
 @router.get("/health/synapse")

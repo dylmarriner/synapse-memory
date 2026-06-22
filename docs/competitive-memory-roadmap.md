@@ -168,7 +168,7 @@ Why this beats competitors:
 - Honcho-style sessions plus Hindsight-style extraction while preserving the raw
   archive for audit/re-extraction.
 
-### Phase 2 — Provenance, confidence, and temporal validity
+### Phase 2 — Provenance, confidence, and temporal validity ✓ Implemented
 
 Extend memories with:
 
@@ -185,7 +185,7 @@ Improve contradiction handling:
 - return the newest valid memory by default;
 - support historical queries like “what did we believe last month?”.
 
-### Phase 3 — Codebase intelligence like BrainSync
+### Phase 3 — Codebase intelligence like BrainSync ✓ Implemented
 
 Build project-local code memory:
 
@@ -200,7 +200,7 @@ Endpoints/tools:
 - `GET /v1/projects/{key}/rules`
 - `GET /v1/projects/{key}/context?query=...`
 
-### Phase 4 — Optional reranking and better recall quality
+### Phase 4 — Optional reranking and better recall quality ✓ Implemented
 
 Add a reranker abstraction after RRF:
 
@@ -235,7 +235,7 @@ Endpoint/tool:
 
 This matches Honcho representations while adding source/confidence links.
 
-### Phase 6 — Observability and benchmarks like AgentMemory
+### Phase 6 — Observability and benchmarks like AgentMemory ✓ Implemented
 
 Add metrics:
 

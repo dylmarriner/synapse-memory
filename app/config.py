@@ -34,6 +34,10 @@ class Settings(BaseSettings):
 
     learning_interval: int = 300
 
+    reranker_enabled: bool = False
+    reranker_provider: str = "none"  # none | llm
+    rerank_top_k: int = 30
+
     model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore"}
 
 

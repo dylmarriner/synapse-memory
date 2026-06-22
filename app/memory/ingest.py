@@ -72,6 +72,11 @@ async def save_memory(
         embedding=embedding,
         importance=importance,
         metadata_=meta,
+        confidence=req.confidence if hasattr(req, "confidence") else 1.0,
+        valid_from=req.valid_from if hasattr(req, "valid_from") else None,
+        valid_until=req.valid_until if hasattr(req, "valid_until") else None,
+        extraction_model=req.extraction_model if hasattr(req, "extraction_model") else None,
+        extraction_version=req.extraction_version if hasattr(req, "extraction_version") else None,
     )
     db.add(memory)
     await db.commit()

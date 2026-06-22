@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+"""Nexus Eval — benchmark recall quality against competitor-beating criteria.
+
+Eval tasks (from competitive-memory-roadmap.md Phase 6):
+  1. preference-recall     — remembers user preference after many sessions
+  2. contradiction-recall  — uses latest preference after contradiction
+  3. fix-command-recall    — recalls exact fix command for recurring bug
+  4. scope-isolation       — distinguishes global vs agent-specific memory
+  5. architecture-recall   — retrieves project architecture decision
+  6. noise-suppression     — avoids injecting irrelevant memories
+
+Usage:
+  scripts/nexus-eval
+  NEXUS_URL=http://localhost:7777 NEXUS_SECRET=... scripts/nexus-eval
+  scripts/nexus-eval --task preference-recall
+  scripts/nexus-eval --verbose
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+
+NEXUS_URL = os.environ.get("NEXUS_URL", "http://localhost:7777")
+NEXUS_SECRET = os.environ.get("NEXUS_SECRET", "")
+EVAL_AGENT = "nexus-eval-agent"
+VERBOSE = False
+
+PASS = "PASS"
+FAIL = "FAIL"
+SKIP = "SKIP"
+
+
+@dataclass
+class EvalResult:
+    task: str
+    status: str
+    detail: str = ""
+    latency_ms: float = 0.0
+    score: float = 0.0
+
+
+def api(method: str, path: str, body: Any = None) -> Any:
+    url = f"{NEXUS_URL}{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Authorization": f"Bearer {NEXUS_SECRET}",
+            "Content-Type": "application/json",
+        },
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code} {method} {path}: {e.read().decode()[:200]}")
+
+
+def save(content: str, agent_id: str = EVAL_AGENT, memory_type: str = "preference", importance: float = 0.7) -> str:
+    r = api("POST", "/v1/memory/save", {
+        "content": content,
+        "agent_id": agent_id,
+        "memory_type": memory_type,
+        "importance": importance,
+    })
+    return r["id"]
+
+
+def recall(query: str, agent_id: Optional[str] = EVAL_AGENT, limit: int = 5) -> list[dict]:
+    r = api("POST", "/v1/memory/recall", {
+        "query": query,
+        "agent_id": agent_id,
+        "limit": limit,
+    })
+    return r.get("results", [])
+
+
+def delete_agent_memories():
+    """Best-effort cleanup: delete all memories for the eval agent."""
+    try:
+        rows = api("GET", f"/v1/browse/memories?agent={EVAL_AGENT}&limit=200")
+        for m in rows.get("memories", []):
+            try:
+                api("DELETE", f"/v1/browse/memories/{m['id']}")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _contains(results: list[dict], keyword: str) -> bool:
+    kw = keyword.lower()
+    return any(kw in r.get("content", "").lower() for r in results)
+
+
+def _top_content(results: list[dict]) -> str:
+    if not results:
+        return ""
+    return results[0].get("content", "")
+
+
+# ── Eval tasks ───────────────────────────────────────────────────────────────
+
+def eval_preference_recall() -> EvalResult:
+    """Save a preference, then save many unrelated memories, then recall it."""
+    pref = "The user prefers dark mode with Solarized Dark theme at font size 16."
+    save(pref, memory_type="preference", importance=0.8)
+    for i in range(8):
+        save(f"User opened file number {i} in the project explorer.", memory_type="observation", importance=0.3)
+
+    t0 = time.monotonic()
+    results = recall("user interface theme preference")
+    latency_ms = (time.monotonic() - t0) * 1000
+
+    if _contains(results, "solarized"):
+        return EvalResult("preference-recall", PASS, "Solarized preference recalled correctly", latency_ms, 1.0)
+    if _contains(results, "dark mode"):
+        return EvalResult("preference-recall", PASS, "Dark mode preference recalled (partial)", latency_ms, 0.7)
+    return EvalResult("preference-recall", FAIL, f"Preference not recalled. Top: {_top_content(results)[:120]}", latency_ms, 0.0)
+
+
+def eval_contradiction_recall() -> EvalResult:
+    """Save a preference, then contradict it, then verify the latest is recalled."""
+    save("The user prefers Python 3.9 as the runtime version.", memory_type="preference", importance=0.7)
+    time.sleep(0.1)
+    save("The user now prefers Python 3.12 as the runtime version. Previous preference for 3.9 is superseded.", memory_type="preference", importance=0.85)
+
+    t0 = time.monotonic()
+    results = recall("Python runtime version preference")
+    latency_ms = (time.monotonic() - t0) * 1000
+
+    if _contains(results, "3.12"):
+        return EvalResult("contradiction-recall", PASS, "Latest preference (3.12) recalled", latency_ms, 1.0)
+    if _contains(results, "3.9") and not _contains(results, "3.12"):
+        return EvalResult("contradiction-recall", FAIL, "Stale preference returned instead of updated one", latency_ms, 0.0)
+    return EvalResult("contradiction-recall", FAIL, f"Unexpected result. Top: {_top_content(results)[:120]}", latency_ms, 0.0)
+
+
+def eval_fix_command_recall() -> EvalResult:
+    """Store a recurring fix command and verify exact retrieval."""
+    fix = "Fix: when pytest fails with 'address already in use', run `lsof -ti:5432 | xargs kill -9` then retry."
+    save(fix, memory_type="lesson", importance=0.9)
+
+    t0 = time.monotonic()
+    results = recall("pytest address already in use port error fix")
+    latency_ms = (time.monotonic() - t0) * 1000
+
+    if _contains(results, "lsof"):
+        return EvalResult("fix-command-recall", PASS, "Fix command recalled correctly", latency_ms, 1.0)
+    if _contains(results, "5432") or _contains(results, "kill"):
+        return EvalResult("fix-command-recall", PASS, "Fix command partially recalled", latency_ms, 0.7)
+    return EvalResult("fix-command-recall", FAIL, f"Fix command not recalled. Top: {_top_content(results)[:120]}", latency_ms, 0.0)
+
+
+def eval_scope_isolation() -> EvalResult:
+    """Global vs agent-specific memories should not bleed across agents."""
+    agent_a = f"{EVAL_AGENT}-agent-a"
+    agent_b = f"{EVAL_AGENT}-agent-b"
+
+    save("Agent A prefers to use pytest for all test runs.", agent_id=agent_a, memory_type="preference")
+    save("Agent B prefers to use jest for all test runs.", agent_id=agent_b, memory_type="preference")
+
+    t0 = time.monotonic()
+    results_a = recall("test runner preference", agent_id=agent_a)
+    latency_ms = (time.monotonic() - t0) * 1000
+
+    has_pytest = _contains(results_a, "pytest")
+    has_jest = _contains(results_a, "jest") and not _contains(results_a, "pytest")
+
+    # Clean up side agent memories
+    for ag in [agent_a, agent_b]:
+        try:
+            rows = api("GET", f"/v1/browse/memories?agent={ag}&limit=50")
+            for m in rows.get("memories", []):
+                api("DELETE", f"/v1/browse/memories/{m['id']}")
+        except Exception:
+            pass
+
+    if has_pytest and not has_jest:
+        return EvalResult("scope-isolation", PASS, "Agent-specific memory scoped correctly", latency_ms, 1.0)
+    if has_jest:
+        return EvalResult("scope-isolation", FAIL, "Agent B memory leaked into Agent A recall", latency_ms, 0.0)
+    return EvalResult("scope-isolation", FAIL, f"No scoped memory found. Top: {_top_content(results_a)[:120]}", latency_ms, 0.0)
+
+
+def eval_architecture_recall() -> EvalResult:
+    """Store an architecture decision and verify it can be retrieved."""
+    arch = (
+        "Architecture decision: we use PostgreSQL with pgvector for the memory store "
+        "because it supports vector similarity, full-text search, and JSONB natively "
+        "without requiring a separate vector database service."
+    )
+    save(arch, memory_type="world", importance=0.85)
+
+    t0 = time.monotonic()
+    results = recall("why do we use PostgreSQL for the memory store")
+    latency_ms = (time.monotonic() - t0) * 1000
+
+    if _contains(results, "pgvector"):
+        return EvalResult("architecture-recall", PASS, "Architecture decision recalled with pgvector detail", latency_ms, 1.0)
+    if _contains(results, "postgresql") or _contains(results, "postgres"):
+        return EvalResult("architecture-recall", PASS, "Architecture decision recalled (partial)", latency_ms, 0.7)
+    return EvalResult("architecture-recall", FAIL, f"Architecture decision not recalled. Top: {_top_content(results)[:120]}", latency_ms, 0.0)
+
+
+def eval_noise_suppression() -> EvalResult:
+    """Irrelevant memories should not dominate the recall results for a specific query."""
+    # Save many noisy memories
+    for i in range(10):
+        save(f"User typed a command in the terminal at step {i}.", memory_type="observation", importance=0.2)
+    # Save one very relevant memory with lower importance
+    save("The database schema uses UUID primary keys for all tables.", memory_type="world", importance=0.5)
+
+    t0 = time.monotonic()
+    results = recall("database schema primary key type")
+    latency_ms = (time.monotonic() - t0) * 1000
+
+    if _contains(results, "uuid"):
+        return EvalResult("noise-suppression", PASS, "Relevant memory surfaced despite noise", latency_ms, 1.0)
+    noisy_top = _contains(results[:2], "terminal") or _contains(results[:2], "command")
+    if noisy_top:
+        return EvalResult("noise-suppression", FAIL, "Noisy observations dominated recall", latency_ms, 0.0)
+    return EvalResult("noise-suppression", FAIL, f"Relevant memory not in top results. Top: {_top_content(results)[:120]}", latency_ms, 0.0)
+
+
+ALL_TASKS = {
+    "preference-recall": eval_preference_recall,
+    "contradiction-recall": eval_contradiction_recall,
+    "fix-command-recall": eval_fix_command_recall,
+    "scope-isolation": eval_scope_isolation,
+    "architecture-recall": eval_architecture_recall,
+    "noise-suppression": eval_noise_suppression,
+}
+
+
+def run_task(name: str, fn) -> EvalResult:
+    try:
+        result = fn()
+    except Exception as e:
+        result = EvalResult(name, FAIL, f"Exception: {e}")
+    return result
+
+
+def main():
+    global VERBOSE
+
+    parser = argparse.ArgumentParser(description="Nexus eval — recall quality benchmarks")
+    parser.add_argument("--task", choices=list(ALL_TASKS), help="Run only this task")
+    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--no-cleanup", action="store_true", help="Skip pre/post memory cleanup")
+    parser.add_argument("--json", action="store_true", help="Output results as JSON")
+    args = parser.parse_args()
+    VERBOSE = args.verbose
+
+    if not NEXUS_SECRET:
+        print("ERROR: NEXUS_SECRET not set", file=sys.stderr)
+        sys.exit(1)
+
+    # Verify connectivity
+    try:
+        api("GET", "/health")
+    except Exception as e:
+        print(f"ERROR: Cannot reach Nexus at {NEXUS_URL}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    tasks = {args.task: ALL_TASKS[args.task]} if args.task else ALL_TASKS
+
+    if not args.no_cleanup:
+        delete_agent_memories()
+
+    results: list[EvalResult] = []
+    for name, fn in tasks.items():
+        if VERBOSE:
+            print(f"  Running {name}…", flush=True)
+        r = run_task(name, fn)
+        results.append(r)
+        if not args.json:
+            status_icon = "✓" if r.status == PASS else ("?" if r.status == SKIP else "✗")
+            print(f"  {status_icon} {r.task:<25} {r.status:<5}  {r.latency_ms:>6.0f}ms  {r.detail[:80]}")
+
+    if not args.no_cleanup:
+        delete_agent_memories()
+
+    passed = sum(1 for r in results if r.status == PASS)
+    failed = sum(1 for r in results if r.status == FAIL)
+    skipped = sum(1 for r in results if r.status == SKIP)
+    avg_score = sum(r.score for r in results) / len(results) if results else 0.0
+
+    if args.json:
+        print(json.dumps({
+            "passed": passed, "failed": failed, "skipped": skipped,
+            "avg_score": round(avg_score, 3),
+            "results": [{"task": r.task, "status": r.status, "detail": r.detail, "latency_ms": round(r.latency_ms), "score": r.score} for r in results],
+        }, indent=2))
+    else:
+        print(f"\n  Results: {passed} passed / {failed} failed / {skipped} skipped  |  avg score {avg_score:.2f}")
+        if failed:
+            sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

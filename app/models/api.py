@@ -13,6 +13,11 @@ class MemorySaveRequest(BaseModel):
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     tags: List[str] = Field(default_factory=list)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    valid_from: Optional[datetime] = None
+    valid_until: Optional[datetime] = None
+    extraction_model: Optional[str] = None
+    extraction_version: Optional[str] = None
 
 
 class MemoryRecallRequest(BaseModel):
@@ -49,6 +54,10 @@ class MemoryResult(BaseModel):
     access_count: int = 0
     confirmed_count: int = 0
     contradicted_count: int = 0
+    confidence: float = 1.0
+    valid_from: Optional[datetime] = None
+    valid_until: Optional[datetime] = None
+    extraction_model: Optional[str] = None
     created_at: Optional[datetime] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     matched_by: List[str] = Field(default_factory=list)

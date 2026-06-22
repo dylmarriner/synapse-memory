@@ -33,6 +33,7 @@ async def lexical_search(
     where = " AND ".join(conditions)
     sql = text(f"""
         SELECT id, content, memory_type, agent_id, importance, access_count, created_at, metadata,
+               confidence, valid_from, valid_until, extraction_model,
                ts_rank(to_tsvector('english', content), plainto_tsquery('english', :query)) AS score
         FROM memories
         WHERE {where}
@@ -55,6 +56,10 @@ async def lexical_search(
                 created_at=r.created_at,
                 metadata=r.metadata or {},
                 matched_by=["lexical"],
+                confidence=float(r.confidence) if r.confidence is not None else 1.0,
+                valid_from=r.valid_from,
+                valid_until=r.valid_until,
+                extraction_model=r.extraction_model,
             )
             for r in rows
         ]

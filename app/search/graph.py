@@ -39,6 +39,7 @@ async def graph_search(
         SELECT DISTINCT ON (m.id)
                m.id, m.content, m.memory_type, m.agent_id,
                m.importance, m.access_count, m.created_at, m.metadata,
+               m.confidence, m.valid_from, m.valid_until, m.extraction_model,
                0.6 AS score
         FROM memories m
         JOIN relations r  ON r.memory_id = m.id
@@ -63,6 +64,10 @@ async def graph_search(
                 created_at=r.created_at,
                 metadata=r.metadata or {},
                 matched_by=["graph"],
+                confidence=float(r.confidence) if r.confidence is not None else 1.0,
+                valid_from=r.valid_from,
+                valid_until=r.valid_until,
+                extraction_model=r.extraction_model,
             )
             for r in rows
         ]

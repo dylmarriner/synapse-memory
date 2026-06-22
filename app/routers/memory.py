@@ -23,6 +23,7 @@ from app.search.graph import graph_search
 from app.search.temporal import temporal_search
 from app.search.fusion import reciprocal_rank_fusion
 from app.search.expand import is_trivial_query, expand_query
+from app.search.rerank import rerank as rerank_results
 
 router = APIRouter()
 
@@ -116,11 +117,14 @@ async def recall(body: MemoryRecallRequest):
                         lists.append(result)
             fused = reciprocal_rank_fusion(lists)[: body.limit]
 
+    fused = await rerank_results(body.query, fused, body.limit)
+
     if fused:
         task = asyncio.create_task(_bump_async([m.id for m in fused]))
         task.add_done_callback(lambda t: log.warning("bump_access failed: %s", t.exception()) if t.exception() else None)
 
-    return MemoryRecallResponse(results=fused, total=len(fused), modes_used=used)
+    fusion_label = "rrf+llm-rerank" if __import__("app.config", fromlist=["settings"]).settings.reranker_enabled else "rrf"
+    return MemoryRecallResponse(results=fused, total=len(fused), modes_used=used, fusion=fusion_label)
 
 
 async def _bump_async(ids: list[str]):

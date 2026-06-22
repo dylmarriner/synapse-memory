@@ -40,6 +40,7 @@ async def vector_search(
     dims = settings.embedding_dims
     sql = text(f"""
         SELECT id, content, memory_type, agent_id, importance, access_count, created_at, metadata,
+               confidence, valid_from, valid_until, extraction_model,
                1 - (embedding <=> CAST(:emb AS vector({dims}))) AS score
         FROM memories
         WHERE {where}
@@ -62,6 +63,10 @@ async def vector_search(
                 created_at=r.created_at,
                 metadata=r.metadata or {},
                 matched_by=["vector"],
+                confidence=float(r.confidence) if r.confidence is not None else 1.0,
+                valid_from=r.valid_from,
+                valid_until=r.valid_until,
+                extraction_model=r.extraction_model,
             )
             for r in rows
         ]

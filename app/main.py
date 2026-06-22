@@ -79,6 +79,11 @@ async def _run_migrations():
             "ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_active TIMESTAMPTZ",
             "ALTER TABLE agents ADD COLUMN IF NOT EXISTS session_count INT NOT NULL DEFAULT 0",
             "ALTER TABLE agents ADD COLUMN IF NOT EXISTS model VARCHAR(100)",
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS confidence FLOAT NOT NULL DEFAULT 1.0",
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS valid_from TIMESTAMPTZ",
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ",
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS extraction_model VARCHAR(100)",
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS extraction_version VARCHAR(50)",
         ]:
             try:
                 await conn.execute(text(col_sql))

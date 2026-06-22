@@ -45,6 +45,11 @@ class Memory(Base):
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     superseded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("memories.id", ondelete="SET NULL"))
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    valid_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    extraction_model: Mapped[str | None] = mapped_column(String(100))
+    extraction_version: Mapped[str | None] = mapped_column(String(50))
 
     agent: Mapped["Agent | None"] = relationship("Agent", back_populates="memories")
 
