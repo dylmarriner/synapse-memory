@@ -42,6 +42,120 @@ async def trigger_consolidate(db: AsyncSession = Depends(get_db)):
     return {"success": True, "stats": stats}
 
 
+@router.get("/admin/metrics")
+async def admin_metrics(request: Request, db: AsyncSession = Depends(get_db)):
+    """Dashboard-ready operational metrics across memory, agents, sessions, and RTK."""
+    components = {"postgres": False, "redis": False}
+    try:
+        await db.execute(text("SELECT 1"))
+        components["postgres"] = True
+    except Exception:
+        pass
+    try:
+        await request.app.state.redis.ping()
+        components["redis"] = True
+    except Exception:
+        pass
+
+    async def scalar(sql: str, params: dict | None = None, default=0):
+        try:
+            return (await db.execute(text(sql), params or {})).scalar() or default
+        except Exception:
+            return default
+
+    totals = {
+        "agents": int(await scalar("SELECT COUNT(*) FROM agents")),
+        "memories": int(await scalar("SELECT COUNT(*) FROM memories")),
+        "entities": int(await scalar("SELECT COUNT(*) FROM entities")),
+        "relations": int(await scalar("SELECT COUNT(*) FROM relations")),
+        "conclusions": int(await scalar("SELECT COUNT(*) FROM conclusions")),
+        "summaries": int(await scalar("SELECT COUNT(*) FROM summaries")),
+        "sessions": int(await scalar("SELECT COUNT(*) FROM sessions")),
+        "messages": int(await scalar("SELECT COUNT(*) FROM messages")),
+        "memory_sources": int(await scalar("SELECT COUNT(*) FROM memory_sources")),
+        "events": int(await scalar("SELECT COUNT(*) FROM events")),
+    }
+
+    last_24h = {
+        "memories": int(await scalar("SELECT COUNT(*) FROM memories WHERE created_at > NOW() - INTERVAL '24 hours'")),
+        "sessions": int(await scalar("SELECT COUNT(*) FROM sessions WHERE started_at > NOW() - INTERVAL '24 hours'")),
+        "messages": int(await scalar("SELECT COUNT(*) FROM messages WHERE created_at > NOW() - INTERVAL '24 hours'")),
+        "events": int(await scalar("SELECT COUNT(*) FROM events WHERE created_at > NOW() - INTERVAL '24 hours'")),
+        "rtk_events": int(await scalar("SELECT COUNT(*) FROM events WHERE action = 'rtk.command' AND created_at > NOW() - INTERVAL '24 hours'")),
+    }
+
+    memory_type_rows = await db.execute(text("""
+        SELECT memory_type, COUNT(*) AS count
+        FROM memories
+        GROUP BY memory_type
+        ORDER BY count DESC
+    """))
+    memory_types = {r.memory_type: int(r.count) for r in memory_type_rows.fetchall()}
+
+    top_agent_rows = await db.execute(text("""
+        SELECT a.name, COUNT(m.id) AS memories, COALESCE(MAX(m.created_at), a.created_at) AS last_memory_at,
+               a.session_count, a.last_active
+        FROM agents a
+        LEFT JOIN memories m ON m.agent_id = a.id
+        GROUP BY a.id, a.name, a.created_at, a.session_count, a.last_active
+        ORDER BY memories DESC, last_memory_at DESC
+        LIMIT 10
+    """))
+    top_agents = [{
+        "agent_id": r.name,
+        "memories": int(r.memories or 0),
+        "session_count": int(r.session_count or 0),
+        "last_active": r.last_active.isoformat() if r.last_active else None,
+        "last_memory_at": r.last_memory_at.isoformat() if r.last_memory_at else None,
+    } for r in top_agent_rows.fetchall()]
+
+    rtk = {
+        "total_events": int(await scalar("SELECT COUNT(*) FROM events WHERE action = 'rtk.command'")),
+        "failed_24h": int(await scalar("""
+            SELECT COUNT(*) FROM events
+            WHERE action = 'rtk.command'
+              AND created_at > NOW() - INTERVAL '24 hours'
+              AND COALESCE((detail::jsonb->>'exit_code')::int, 0) != 0
+        """)),
+        "tokens_saved_estimate": int(await scalar("""
+            SELECT COALESCE(SUM(COALESCE((detail::jsonb->>'tokens_saved_estimate')::int, 0)), 0)
+            FROM events WHERE action = 'rtk.command'
+        """)),
+        "durable_memories": int(await scalar("SELECT COUNT(*) FROM memories WHERE metadata->>'source' = 'rtk'")),
+    }
+
+    recent_rows = await db.execute(text("""
+        SELECT id, actor, action, detail, created_at
+        FROM events
+        ORDER BY created_at DESC
+        LIMIT 20
+    """))
+    recent_events = []
+    for row in recent_rows.fetchall():
+        try:
+            detail = json.loads(row.detail) if isinstance(row.detail, str) else row.detail
+        except Exception:
+            detail = {"raw": row.detail}
+        recent_events.append({
+            "id": str(row.id),
+            "actor": row.actor,
+            "action": row.action,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "detail": detail,
+        })
+
+    return {
+        "healthy": components["postgres"],
+        "components": components,
+        "totals": totals,
+        "last_24h": last_24h,
+        "memory_types": memory_types,
+        "top_agents": top_agents,
+        "rtk": rtk,
+        "recent_events": recent_events,
+    }
+
+
 @router.get("/admin/rtk")
 async def rtk_metrics(db: AsyncSession = Depends(get_db)):
     """Return RTK command telemetry for dashboards and operations views."""

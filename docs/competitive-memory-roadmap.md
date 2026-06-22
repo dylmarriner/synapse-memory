@@ -311,7 +311,8 @@ High-priority connector targets are tracked in `docs/agent-target-registry.md`.
    linking implemented for session extraction.
 5. Add `/v1/agents/{id}/card` using existing summaries/conclusions/memories.
    Implemented initial Honcho-style agent card endpoint.
-6. Add `/v1/admin/metrics` and RTK gain capture.
+6. Add `/v1/admin/metrics` and RTK gain capture. Initial dashboard metrics
+   endpoint implemented; RTK event capture is active via `/v1/rtk/events`.
 7. Expand `/v1/rtk/events` into dashboard-visible command telemetry and optional
    hook/proxy integration for agents that support command wrappers.
 8. Expand Nexus Doctor using `docs/agent-target-registry.md`: Gemini CLI, Qwen
