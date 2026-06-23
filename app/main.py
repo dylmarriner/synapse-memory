@@ -445,7 +445,23 @@ async function loadStats(){try{const d=await apiFetch('/v1/browse/stats');docume
 async function loadOps(){try{const [m,r]=await Promise.all([apiFetch('/v1/admin/metrics'),apiFetch('/v1/admin/rtk/summary')]);document.getElementById('o-sessions').textContent=m.totals?.sessions??0;document.getElementById('o-messages').textContent=m.totals?.messages??0;document.getElementById('o-rtk-tokens').textContent=r.tokens_saved_estimate??0;document.getElementById('o-rtk-fail').textContent=r.failures??0;document.getElementById('ops-rtk-agents').textContent=(r.by_agent||[]).map(a=>`${a.agent_id}: ${a.tokens_saved_estimate} tokens · ${a.count} cmds · ${a.failures} failures`).join('\n')||'No RTK telemetry yet.';document.getElementById('ops-events').textContent=(m.recent_events||[]).slice(0,12).map(e=>`${fmtDate(e.created_at)} ${e.action} ${e.actor||''}`).join('\n')||'No recent events.';}catch(e){document.getElementById('ops-events').textContent='Operations load failed: '+e.message;}}
 async function loadAgents(){try{const d=await apiFetch('/v1/browse/agents');state.agents=d.agents||[];const all=`<div class="agent-item${!state.agent?' active':''}" onclick="filterAgent(null)"><span>All channels</span><span class="agent-count">Σ</span></div>`;document.getElementById('agent-list').innerHTML=all+state.agents.map(a=>`<div class="agent-item${state.agent===a.name?' active':''}" onclick="filterAgent('${escHtml(a.name)}')"><span title="${escHtml(a.name)}"><span>${escHtml(a.name.length>18?a.name.slice(0,18)+'…':a.name)}</span><br><span class="${deviceClass(a)}">⌁ ${escHtml(deviceLabel(a))}</span></span><span class="agent-count">${a.memory_count}</span></div>`).join('');renderAgentCards();}catch(e){}}
 function renderAgentCards(){const el=document.getElementById('agent-cards');if(!el)return;el.innerHTML=(state.agents||[]).map(a=>`<article class="agentCard" onclick="showAgent('${escHtml(a.name)}')"><h4>${escHtml(a.name)}</h4><div class="${deviceClass(a)}">⌁ ${escHtml(deviceLabel(a))}</div><div class="agentMeta"><span>mem ${a.memory_count}</span><span>ent ${a.entity_count}</span><span>rules ${a.conclusion_count}</span><span>sessions ${a.session_count||0}</span><span>host ${escHtml(a.hostname||'unknown')}</span><span>source ${escHtml(a.source||'unknown')}</span><span>model ${escHtml(a.model||'unknown')}</span><span>${fmtDate(a.last_active)}</span></div></article>`).join('')||'<div class="empty">No agents registered.</div>';}
-function showAgent(name){const a=state.agents.find(x=>x.name===name);document.getElementById('agent-detail').textContent=a?`AGENT: ${a.name}
+async function showAgent(name){const el=document.getElementById('agent-detail');const a=state.agents.find(x=>x.name===name);if(!a){el.textContent='No channel selected.';return;}el.textContent='Loading agent card…';try{const c=await apiFetch('/v1/agents/'+encodeURIComponent(name)+'/card');el.textContent=`AGENT CARD: ${c.display_name||name}
+CONFIDENCE: ${Math.round((c.confidence||0)*100)}%
+MODEL: ${c.model||a.model||'unknown'}
+MEMORIES: ${c.memory_count} · ENTITIES: ${c.entity_count} · CONCLUSIONS: ${c.conclusion_count} · SUMMARIES: ${c.summary_count}
+TRUST: ✓ ${c.confirmed_count||0} · ⚠ ${c.contradicted_count||0}
+SOURCES: ${JSON.stringify(c.source_counts||{})}
+TYPES: ${JSON.stringify(c.top_memory_types||{})}
+
+REPRESENTATION:
+${c.representation||'(none yet)'}
+
+CONCLUSIONS:
+${(c.conclusions||[]).map(x=>'• '+x).join('\n')||'(none)'}
+
+TOP MEMORIES:
+${(c.recent_memories||[]).map(m=>`• [${m.memory_type}] ${m.content}`).join('\n\n')||'(none)'}
+`;}catch(e){el.textContent=`AGENT: ${a.name}
 DEVICE: ${deviceLabel(a)}
 HOST: ${a.hostname||'unknown'}
 SOURCE: ${a.source||'unknown'}
@@ -455,8 +471,10 @@ ENTITIES: ${a.entity_count}
 RULES: ${a.conclusion_count}
 LAST ACTIVE: ${fmtDate(a.last_active)}
 
+Agent card load failed: ${e.message}
+
 RAW:
-${JSON.stringify(a,null,2)}`:'No channel selected.';}
+${JSON.stringify(a,null,2)}`;}}
 function filterAgent(name){state.agent=name;state.offset=0;loadAgents();loadMemories();showAgent(name);switchTab('vault');}
 function filterType(type){state.type=state.type===type?'':type;document.getElementById('type-filter').value=state.type;state.offset=0;loadStats();loadMemories();switchTab('vault');}
 async function deleteMemory(id){if(!confirm('Purge this memory record?'))return;try{await apiFetch('/v1/browse/memories/'+id,{method:'DELETE'});document.getElementById('mc-'+id)?.remove();loadStats();loadAgents();}catch(e){alert('Delete failed: '+e.message);}}

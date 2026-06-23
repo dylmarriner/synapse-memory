@@ -399,6 +399,10 @@ RTK token savings, failures, per-agent RTK usage, and recent events.
 - Agent context preview.
 - Rebuild representation button.
 
+Implemented: selecting an agent in the zero-build dashboard now loads
+`/v1/agents/{id}/card` and displays confidence, representation, source counts,
+memory type distribution, conclusions, and top memories.
+
 ### UI Phase 3 — Recall Lab
 
 - Add debug recall endpoint.
