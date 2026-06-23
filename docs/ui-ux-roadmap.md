@@ -416,6 +416,9 @@ memory type distribution, conclusions, and top memories.
 - Raw message archive.
 - Extracted-memory provenance links.
 
+Implemented: zero-build dashboard now includes a Sessions tab that lists recent
+raw sessions and displays selected session metadata plus raw message timeline.
+
 ### UI Phase 5 — Graph and project intelligence
 
 - Entity graph.
