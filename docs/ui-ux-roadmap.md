@@ -409,6 +409,10 @@ memory type distribution, conclusions, and top memories.
 - Build mode-by-mode comparison UI.
 - Add feedback controls.
 
+Implemented: `/v1/memory/recall/debug` returns vector, lexical, graph,
+temporal, fused, and reranked results with explanation metadata. The zero-build
+dashboard includes a Recall Lab tab for side-by-side mode comparison.
+
 ### UI Phase 4 — Sessions and provenance
 
 - Requires backend Phase 1 session tables.

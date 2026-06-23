@@ -13,6 +13,7 @@ from app.models.api import (
     MemorySaveRequest, MemorySaveResponse,
     MemoryBatchSaveRequest, MemoryBatchSaveResponse,
     MemoryRecallRequest, MemoryRecallResponse,
+    MemoryRecallDebugResponse,
     MemoryReflectRequest, MemoryReflectResponse,
 )
 from app.memory.ingest import save_memory, bump_access
@@ -125,6 +126,71 @@ async def recall(body: MemoryRecallRequest):
 
     fusion_label = "rrf+llm-rerank" if __import__("app.config", fromlist=["settings"]).settings.reranker_enabled else "rrf"
     return MemoryRecallResponse(results=fused, total=len(fused), modes_used=used, fusion=fusion_label)
+
+
+@router.post("/recall/debug", response_model=MemoryRecallDebugResponse)
+async def recall_debug(body: MemoryRecallRequest):
+    """Recall lab endpoint: return per-mode candidates plus fused/reranked rankings."""
+    if is_trivial_query(body.query):
+        return MemoryRecallDebugResponse(
+            query=body.query,
+            expanded_query=body.query,
+            agent_id=body.agent_id,
+            modes_requested=body.search_modes or [],
+            explanation={"trivial_query": True},
+        )
+
+    modes = body.search_modes or ["vector", "lexical", "graph", "temporal"]
+    expanded_query = await expand_query(body.query)
+    tasks = []
+    names = []
+    if "vector" in modes:
+        names.append("vector")
+        tasks.append(_search_in_own_session(vector_search, expanded_query, body.agent_id, body.memory_types, body.limit * 2))
+    if "lexical" in modes:
+        names.append("lexical")
+        tasks.append(_search_in_own_session(lexical_search, body.query, body.agent_id, body.memory_types, body.limit * 2))
+    if "graph" in modes:
+        names.append("graph")
+        tasks.append(_search_in_own_session(graph_search, body.query, body.agent_id, body.limit * 2))
+    if "temporal" in modes:
+        names.append("temporal")
+        tasks.append(_search_in_own_session(temporal_search, body.query, body.agent_id, body.memory_types, body.limit * 2))
+
+    raw = await asyncio.gather(*tasks, return_exceptions=True) if tasks else []
+    per_mode = {}
+    lists = []
+    errors = {}
+    for name, result in zip(names, raw):
+        if isinstance(result, Exception):
+            per_mode[name] = []
+            errors[name] = str(result)
+            continue
+        per_mode[name] = result[: body.limit]
+        if result:
+            lists.append(result)
+
+    fused_full = reciprocal_rank_fusion(lists)
+    fused = fused_full[: body.limit]
+    reranked = await rerank_results(body.query, fused_full, body.limit)
+    fusion_label = "rrf+llm-rerank" if __import__("app.config", fromlist=["settings"]).settings.reranker_enabled else "rrf"
+    return MemoryRecallDebugResponse(
+        query=body.query,
+        expanded_query=expanded_query,
+        agent_id=body.agent_id,
+        modes_requested=modes,
+        per_mode=per_mode,
+        fused=fused,
+        reranked=reranked,
+        fusion=fusion_label,
+        explanation={
+            "mode_counts": {k: len(v) for k, v in per_mode.items()},
+            "errors": errors,
+            "rrf_inputs": len(lists),
+            "limit": body.limit,
+            "reranker_enabled": fusion_label != "rrf",
+        },
+    )
 
 
 async def _bump_async(ids: list[str]):

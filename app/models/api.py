@@ -88,6 +88,18 @@ class MemoryRecallResponse(BaseModel):
     fusion: str = "rrf"
 
 
+class MemoryRecallDebugResponse(BaseModel):
+    query: str
+    expanded_query: str
+    agent_id: Optional[str] = None
+    modes_requested: List[str]
+    per_mode: Dict[str, List[MemoryResult]] = Field(default_factory=dict)
+    fused: List[MemoryResult] = Field(default_factory=list)
+    reranked: List[MemoryResult] = Field(default_factory=list)
+    fusion: str = "rrf"
+    explanation: Dict[str, Any] = Field(default_factory=dict)
+
+
 class MemoryReflectResponse(BaseModel):
     reflection: str
     based_on: List[MemoryResult] = Field(default_factory=list)
