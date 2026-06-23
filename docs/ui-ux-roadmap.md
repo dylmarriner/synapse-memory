@@ -388,6 +388,10 @@ Cons:
 - Add agent cards using `/v1/browse/agents`.
 - Add RTK setup/status panel with instructions.
 
+Implemented: zero-build dashboard now includes an Operations tab backed by
+`/v1/admin/metrics` and `/v1/admin/rtk/summary`, showing sessions, messages,
+RTK token savings, failures, per-agent RTK usage, and recent events.
+
 ### UI Phase 2 — Agent and memory detail drawers
 
 - Memory detail drawer.
