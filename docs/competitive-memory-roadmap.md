@@ -256,6 +256,10 @@ Add eval tasks:
 - retrieves project architecture decision
 - avoids injecting irrelevant memories
 
+Initial live REST eval harness added in `evals/run_memory_evals.py` with cases for
+preference recall, latest correction recall, recurring bug fix recall, project
+architecture decision recall, and irrelevant-memory suppression checks.
+
 ### Phase 6.5 — Competitive UI
 
 Build the dashboard into a premium agent memory command center:
