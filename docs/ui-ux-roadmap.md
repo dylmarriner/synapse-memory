@@ -411,7 +411,9 @@ memory type distribution, conclusions, and top memories.
 
 Implemented: `/v1/memory/recall/debug` returns vector, lexical, graph,
 temporal, fused, and reranked results with explanation metadata. The zero-build
-dashboard includes a Recall Lab tab for side-by-side mode comparison.
+dashboard includes a Recall Lab tab for side-by-side mode comparison. Recall Lab
+result cards include Useful/Not useful feedback controls that call confirm and
+contradict memory trust endpoints.
 
 ### UI Phase 4 — Sessions and provenance
 
