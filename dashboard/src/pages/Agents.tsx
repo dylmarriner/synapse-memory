@@ -1,11 +1,11 @@
-import { useQuery } from '@tanstack/react-query';
-import { fetchAgents, fetchAgentCard, rebuildRepresentation } from '../api/nexus';
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { fetchAgents, fetchAgentCard } from '../api/nexus';
 
 export default function Agents() {
   const [selected, setSelected] = useState<string | null>(null);
-  const { data: agents } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents, refetchInterval: 15000 });
-  const { data: card } = useQuery({
+  const { data: agents, isLoading: agentsLoading, error: agentsError } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents, refetchInterval: 15000 });
+  const { data: card, isLoading: cardLoading, error: cardError } = useQuery({
     queryKey: ['agent-card', selected],
     queryFn: () => fetchAgentCard(selected!),
     enabled: !!selected,
@@ -23,11 +23,15 @@ export default function Agents() {
       <div className="grid grid-cols-[1fr_1fr] gap-4 flex-1 min-h-0">
         {/* Agent cards */}
         <div className="overflow-auto space-y-2">
+          {agentsLoading && <div className="text-[var(--color-dim)] text-sm">Loading agent channels…</div>}
+          {agentsError && <div className="text-[var(--color-red)] text-sm">Failed to load agents: {String(agentsError)}</div>}
           {agents?.agents?.map((a) => (
-            <div
+            <button
               key={a.name}
-              className={`border p-3 cursor-pointer ${selected === a.name ? 'border-[var(--color-cyan)] bg-[rgba(102,252,241,.08)]' : 'border-[rgba(102,252,241,.11)] bg-[rgba(255,255,255,.025)]'} hover:border-[var(--color-cyan)]`}
-              onClick={() => setSelected(a.name)}>
+              type="button"
+              className={`w-full text-left border p-3 cursor-pointer ${selected === a.name ? 'border-[var(--color-cyan)] bg-[rgba(102,252,241,.08)]' : 'border-[rgba(102,252,241,.11)] bg-[rgba(255,255,255,.025)]'} hover:border-[var(--color-cyan)]`}
+              onClick={() => setSelected(a.name)}
+              aria-pressed={selected === a.name}>
               <h4 className="m-0 text-sm">{a.name}</h4>
               <div className="text-xs text-[var(--color-dim)] flex gap-2 mt-1">
                 <span>mem {a.memory_count}</span>
@@ -36,13 +40,15 @@ export default function Agents() {
                 <span>sessions {a.session_count}</span>
                 <span className="ml-auto">{a.last_active ? new Date(a.last_active).toLocaleDateString() : ''}</span>
               </div>
-            </div>
+            </button>
           ))}
         </div>
 
         {/* Detail panel */}
         <div className="border border-[rgba(102,252,241,.2)] bg-[var(--color-panel)] p-4 overflow-auto">
           {!selected && <div className="text-[var(--color-dim)] text-sm">Select an agent channel to inspect.</div>}
+          {cardLoading && <div className="text-[var(--color-dim)] text-sm">Loading agent card…</div>}
+          {cardError && <div className="text-[var(--color-red)] text-sm">Failed to load agent card: {String(cardError)}</div>}
           {card && (
             <div className="space-y-3 text-sm leading-relaxed">
               <div className="flex items-center gap-2">

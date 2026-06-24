@@ -16,10 +16,11 @@ export default function Console() {
       const d = await recallMemory({ query: query.trim(), limit: 8 });
       setResults(d.results.map((r) => ({ ...r, score: 0, modes_used: d.modes_used })));
     } catch (e) {
-      setError(String(e));
+      setError(e instanceof Error ? e.message : String(e));
       setResults(null);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (

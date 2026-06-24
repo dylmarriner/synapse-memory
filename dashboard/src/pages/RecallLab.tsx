@@ -27,8 +27,8 @@ export default function RecallLab() {
   const [compareAgent, setCompareAgent] = useState('');
   const [payload, setPayload] = useState<{ q: string; agent: string | null } | null>(null);
 
-  const { data: agents } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents });
-  const { data: results } = useQuery({
+  const { data: agents, error: agentsError } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents });
+  const { data: results, isFetching, error } = useQuery({
     queryKey: ['recall-lab', payload?.q, payload?.agent],
     queryFn: () => recallDebug({ query: payload!.q, agent_id: payload?.agent, limit: 8 }),
     enabled: !!payload?.q,
@@ -54,8 +54,11 @@ export default function RecallLab() {
           {agents?.agents?.map((a) => <option key={a.name} value={a.name}>{a.name}</option>)}
         </select>
         <button className="border border-[var(--color-cyan)] text-[var(--color-cyan)] px-4 py-2 text-sm hover:bg-[rgba(102,252,241,.08)]"
-          onClick={() => setPayload({ q: query, agent: null })}>Run Lab</button>
+          onClick={() => setPayload({ q: query.trim(), agent: compareAgent || null })} disabled={!query.trim() || isFetching}>{isFetching ? 'Running…' : 'Run Lab'}</button>
       </div>
+
+      {agentsError && <div className="text-[var(--color-red)] text-xs mt-2">Failed to load agents: {String(agentsError)}</div>}
+      {error && <div className="text-[var(--color-red)] text-xs mt-2">Recall lab failed: {String(error)}</div>}
 
       {results && (
         <div className="grid grid-cols-2 gap-4 flex-1 min-h-0 mt-2 overflow-auto">

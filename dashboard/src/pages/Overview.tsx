@@ -72,7 +72,7 @@ export default function Overview() {
           {typeData.length > 0 && (
             <ResponsiveContainer width="100%" height={220}>
               <PieChart>
-                <Pie data={typeData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                <Pie data={typeData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent = 0 }) => `${name} ${(percent * 100).toFixed(0)}%`}>
                   {typeData.map((_, i) => (
                     <Cell key={i} fill={['#66fcf1', '#b967ff', '#ff3cac', '#ffd166', '#63ff9f'][i % 5]} />
                   ))}

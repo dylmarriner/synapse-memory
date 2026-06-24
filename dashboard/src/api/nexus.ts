@@ -5,41 +5,57 @@
 const TOKEN_KEY = 'nexus_dashboard_token';
 
 function getToken(): string {
-  const stored = sessionStorage.getItem(TOKEN_KEY);
+  if (typeof window === 'undefined') return '';
+
+  const stored = window.sessionStorage.getItem(TOKEN_KEY);
   if (stored) return stored;
-  // Prompt user once
-  const token = prompt('Enter Nexus dashboard token (from your .env NEXUS_SECRET):');
-  if (token) sessionStorage.setItem(TOKEN_KEY, token);
-  return token || '';
+
+  const token = window.prompt('Enter Nexus dashboard token (from your .env NEXUS_SECRET):')?.trim() ?? '';
+  if (token) window.sessionStorage.setItem(TOKEN_KEY, token);
+  return token;
 }
 
 export function setToken(token: string) {
-  sessionStorage.setItem(TOKEN_KEY, token);
+  if (typeof window === 'undefined') return;
+  window.sessionStorage.setItem(TOKEN_KEY, token.trim());
 }
 
 export function clearToken() {
-  sessionStorage.removeItem(TOKEN_KEY);
+  if (typeof window === 'undefined') return;
+  window.sessionStorage.removeItem(TOKEN_KEY);
+}
+
+function getErrorMessage(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object' && 'detail' in error) return String(error.detail);
+  if (error && typeof error === 'object' && 'message' in error) return String(error.message);
+  return 'unknown error';
 }
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const token = getToken();
+  const headers = new Headers(options?.headers);
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  if (options?.body !== undefined && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+
   const res = await fetch(path, {
     ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
+    headers,
   });
   if (res.status === 401) {
     clearToken();
     throw new Error('Unauthorized — re-enter your token');
   }
   if (!res.ok) {
-    const text = await res.text().catch(() => 'unknown error');
-    throw new Error(`${res.status}: ${text.slice(0, 200)}`);
+    const contentType = res.headers.get('content-type') ?? '';
+    const body: unknown = contentType.includes('application/json')
+      ? await res.json().catch(() => null)
+      : await res.text().catch(() => null);
+    throw new Error(`${res.status}: ${getErrorMessage(body).slice(0, 300)}`);
   }
-  return res.json();
+
+  if (res.status === 204) return undefined as T;
+  return res.json() as Promise<T>;
 }
 
 // ── Stats / Overview ───────────────────────────────────────────────────────
@@ -143,7 +159,7 @@ export async function rebuildRepresentation(agentName: string): Promise<{ repres
 // ── Sessions ───────────────────────────────────────────────────────────────
 
 export async function fetchSessions(limit = 50): Promise<SessionItem[]> {
-  return apiFetch<SessionItem[]>(`/v1/sessions?limit=${limit}`);
+  return apiFetch<SessionItem[]>(`/v1/sessions?limit=${encodeURIComponent(String(limit))}`);
 }
 
 export async function fetchSessionDetail(id: string, limit = 200): Promise<{
@@ -155,7 +171,7 @@ export async function fetchSessionDetail(id: string, limit = 200): Promise<{
   ended_at: string | null;
   messages: { id: string; role: string; content: string; token_estimate: number; created_at: string }[];
 }> {
-  return apiFetch(`/v1/sessions/${encodeURIComponent(id)}?limit=${limit}`);
+  return apiFetch(`/v1/sessions/${encodeURIComponent(id)}?limit=${encodeURIComponent(String(limit))}`);
 }
 
 // ── Admin ──────────────────────────────────────────────────────────────────

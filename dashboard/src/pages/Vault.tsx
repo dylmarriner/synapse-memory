@@ -12,15 +12,15 @@ export default function Vault() {
   const qc = useQueryClient();
   const limit = 20;
 
-  const { data: agents } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents });
-  const { data } = useQuery({
+  const { data: agents, error: agentsError } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents });
+  const { data, isLoading, error } = useQuery({
     queryKey: ['memories', query, type, agent, offset],
     queryFn: () => fetchMemories({ q: query || undefined, type: type || undefined, agent: agent || undefined, limit, offset }),
   });
 
   const delMut = useMutation({ mutationFn: deleteMemory, onSuccess: () => qc.invalidateQueries({ queryKey: ['memories'] }) });
-  const confMut = useMutation({ mutationFn: confirmMemory });
-  const contrMut = useMutation({ mutationFn: contradictMemory });
+  const confMut = useMutation({ mutationFn: confirmMemory, onSuccess: () => qc.invalidateQueries({ queryKey: ['memories'] }) });
+  const contrMut = useMutation({ mutationFn: contradictMemory, onSuccess: () => qc.invalidateQueries({ queryKey: ['memories'] }) });
 
   return (
     <>
@@ -48,8 +48,12 @@ export default function Vault() {
         </select>
       </div>
 
+      {agentsError && <div className="text-[var(--color-red)] text-xs">Failed to load agents: {String(agentsError)}</div>}
+      {error && <div className="text-[var(--color-red)] text-xs">Failed to load memories: {String(error)}</div>}
+
       {/* Results */}
       <div className="flex-1 overflow-auto space-y-2 min-h-0 mt-2">
+        {isLoading && <div className="text-[var(--color-dim)] text-center py-8">Loading memory signatures…</div>}
         {data?.memories?.map((m) => (
           <div key={m.id} className="border border-[rgba(102,252,241,.11)] bg-[rgba(255,255,255,.025)] p-3">
             <div className="flex items-center gap-2 mb-1">
@@ -63,13 +67,13 @@ export default function Vault() {
               <span>accessed {m.access_count}x</span>
               {m.confirmed_count > 0 && <span className="text-[var(--color-green)]">✓ {m.confirmed_count}</span>}
               {m.contradicted_count > 0 && <span className="text-[var(--color-red)]">⚠ {m.contradicted_count}</span>}
-              <button className="ml-auto text-[var(--color-red)] hover:underline" onClick={() => delMut.mutate(m.id)}>Delete</button>
+              <button className="ml-auto text-[var(--color-red)] hover:underline" onClick={() => { if (window.confirm('Delete this memory?')) delMut.mutate(m.id); }}>Delete</button>
               <button className="text-[var(--color-green)] hover:underline" onClick={() => confMut.mutate(m.id)}>✓</button>
               <button className="text-[var(--color-amber)] hover:underline" onClick={() => contrMut.mutate(m.id)}>⚠</button>
             </div>
           </div>
         ))}
-        {(!data?.memories || data.memories.length === 0) && (
+        {!isLoading && !error && (!data?.memories || data.memories.length === 0) && (
           <div className="text-[var(--color-dim)] text-center py-8">No memory signatures found.</div>
         )}
       </div>
