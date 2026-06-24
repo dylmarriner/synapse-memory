@@ -1,24 +1,35 @@
 #!/usr/bin/env python3
 """Nexus Eval — benchmark recall quality against competitor-beating criteria.
 
-Eval tasks (from competitive-memory-roadmap.md Phase 6):
+Eval tasks:
   1. preference-recall     — remembers user preference after many sessions
   2. contradiction-recall  — uses latest preference after contradiction
   3. fix-command-recall    — recalls exact fix command for recurring bug
   4. scope-isolation       — distinguishes global vs agent-specific memory
   5. architecture-recall   — retrieves project architecture decision
   6. noise-suppression     — avoids injecting irrelevant memories
+  7. symbol-recall         — retrieves function signature/return type from code memory
+  8. bug-fix-chain         — retrieves root cause from multi-step debug session
+  9. cross-file-ref        — retrieves cross-file architecture dependency
+  10. agent-scope-bleed    — 3-agent shared project, verify correct scoping
+
+LongMemEval-S format (--eval-format longmemeval-s --input FILE.json):
+  Input JSON: [{question, answer, conversation_history: [{role, content}]}]
+  Output: {"total": N, "correct": N, "accuracy": float, "samples": [...]}
 
 Usage:
   scripts/nexus-eval
   NEXUS_URL=http://localhost:7777 NEXUS_SECRET=... scripts/nexus-eval
   scripts/nexus-eval --task preference-recall
   scripts/nexus-eval --verbose
+  scripts/nexus-eval --eval-format longmemeval-s --input samples.json
+  scripts/nexus-eval --json
 """
 
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import sys
@@ -86,10 +97,10 @@ def recall(query: str, agent_id: Optional[str] = EVAL_AGENT, limit: int = 5) -> 
     return r.get("results", [])
 
 
-def delete_agent_memories():
+def delete_agent_memories(agent_id: str = EVAL_AGENT):
     """Best-effort cleanup: delete all memories for the eval agent."""
     try:
-        rows = api("GET", f"/v1/browse/memories?agent={EVAL_AGENT}&limit=200")
+        rows = api("GET", f"/v1/browse/memories?agent={agent_id}&limit=200")
         for m in rows.get("memories", []):
             try:
                 api("DELETE", f"/v1/browse/memories/{m['id']}")
@@ -108,6 +119,11 @@ def _top_content(results: list[dict]) -> str:
     if not results:
         return ""
     return results[0].get("content", "")
+
+
+def _similarity(a: str, b: str) -> float:
+    """Simple token overlap similarity score 0.0–1.0."""
+    return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
 # ── Eval tasks ───────────────────────────────────────────────────────────────
@@ -178,7 +194,6 @@ def eval_scope_isolation() -> EvalResult:
     has_pytest = _contains(results_a, "pytest")
     has_jest = _contains(results_a, "jest") and not _contains(results_a, "pytest")
 
-    # Clean up side agent memories
     for ag in [agent_a, agent_b]:
         try:
             rows = api("GET", f"/v1/browse/memories?agent={ag}&limit=50")
@@ -216,10 +231,8 @@ def eval_architecture_recall() -> EvalResult:
 
 def eval_noise_suppression() -> EvalResult:
     """Irrelevant memories should not dominate the recall results for a specific query."""
-    # Save many noisy memories
     for i in range(10):
         save(f"User typed a command in the terminal at step {i}.", memory_type="observation", importance=0.2)
-    # Save one very relevant memory with lower importance
     save("The database schema uses UUID primary keys for all tables.", memory_type="world", importance=0.5)
 
     t0 = time.monotonic()
@@ -234,6 +247,115 @@ def eval_noise_suppression() -> EvalResult:
     return EvalResult("noise-suppression", FAIL, f"Relevant memory not in top results. Top: {_top_content(results)[:120]}", latency_ms, 0.0)
 
 
+# ── Coding-specific eval tasks ────────────────────────────────────────────────
+
+def eval_symbol_recall() -> EvalResult:
+    """Store function signatures, then recall a specific function's return type."""
+    signatures = [
+        "Function `parse_config(path: str) -> dict`: reads a YAML config file and returns a dict of settings.",
+        "Function `build_index(docs: list[str]) -> VectorIndex`: embeds documents and builds a pgvector index.",
+        "Function `run_migrations(engine) -> None`: applies all pending Alembic migrations to the database.",
+        "Function `get_embedding(text: str) -> list[float]`: calls fastembed to produce a 384-dim vector.",
+        "Function `recall_memories(query: str, agent_id: str, limit: int) -> list[Memory]`: runs 4-mode fused recall.",
+        "Function `contradict_memory(old_id: UUID, new_id: UUID, db) -> None`: marks old memory superseded.",
+        "Function `compress_context(memories: list, token_budget: int) -> str`: truncates to token budget.",
+        "Function `extract_entities(content: str, llm) -> list[Entity]`: NER extraction via LLM prompt.",
+        "Function `consolidate(db) -> ConsolidationStats`: deduplicates and decays importance scores.",
+        "Function `schedule_job(queue: str, payload: dict, redis) -> str`: pushes a job onto Redis queue.",
+    ]
+    for sig in signatures:
+        save(sig, memory_type="world", importance=0.75)
+
+    t0 = time.monotonic()
+    results = recall("what does parse_config return")
+    latency_ms = (time.monotonic() - t0) * 1000
+
+    if _contains(results, "parse_config") and _contains(results, "dict"):
+        return EvalResult("symbol-recall", PASS, "parse_config signature recalled with return type", latency_ms, 1.0)
+    if _contains(results, "parse_config"):
+        return EvalResult("symbol-recall", PASS, "parse_config recalled (return type missing)", latency_ms, 0.6)
+    return EvalResult("symbol-recall", FAIL, f"parse_config not recalled. Top: {_top_content(results)[:120]}", latency_ms, 0.0)
+
+
+def eval_bug_fix_chain() -> EvalResult:
+    """Store a multi-step debug session; recall the root cause."""
+    steps = [
+        "Debug step 1: the server crashes on startup with 'relation embeddings does not exist'.",
+        "Debug step 2: checked migrations — the embeddings column was added in migration 003 but not applied.",
+        "Debug step 3: ran `alembic upgrade head` but it failed with 'target database is not up to date'.",
+        "Debug step 4: discovered the database had been restored from a backup that predated migration 002.",
+        "Root cause: backup restore skipped two migrations. Fix: run `alembic stamp 001` then `alembic upgrade head`.",
+    ]
+    for step in steps:
+        save(step, memory_type="lesson", importance=0.8)
+
+    t0 = time.monotonic()
+    results = recall("why does the server crash with relation embeddings does not exist")
+    latency_ms = (time.monotonic() - t0) * 1000
+
+    if _contains(results, "backup") and (_contains(results, "migration") or _contains(results, "alembic")):
+        return EvalResult("bug-fix-chain", PASS, "Root cause (backup + migration) recalled correctly", latency_ms, 1.0)
+    if _contains(results, "migration") or _contains(results, "alembic"):
+        return EvalResult("bug-fix-chain", PASS, "Migration cause recalled (backup detail missing)", latency_ms, 0.6)
+    return EvalResult("bug-fix-chain", FAIL, f"Root cause not recalled. Top: {_top_content(results)[:120]}", latency_ms, 0.0)
+
+
+def eval_cross_file_ref() -> EvalResult:
+    """Store architecture facts across multiple conceptual files; recall a dependency."""
+    facts = [
+        "app/routers/memory.py imports app/search/fusion.py for reciprocal rank fusion after multi-mode search.",
+        "app/search/fusion.py depends on app/models/api.py for the MemoryResult type.",
+        "app/memory/extract.py imports app/embeddings.py to generate vectors before storing memories.",
+        "app/main.py registers all routers: memory, agents, sessions, synapse, admin, browse, compat.",
+        "app/config.py is imported by every module that needs settings — it is the single config source of truth.",
+    ]
+    for fact in facts:
+        save(fact, memory_type="world", importance=0.8)
+
+    t0 = time.monotonic()
+    results = recall("what does the memory router depend on for ranking results")
+    latency_ms = (time.monotonic() - t0) * 1000
+
+    if _contains(results, "fusion") or _contains(results, "reciprocal"):
+        return EvalResult("cross-file-ref", PASS, "Cross-file dependency (fusion) recalled correctly", latency_ms, 1.0)
+    if _contains(results, "memory.py") or _contains(results, "search"):
+        return EvalResult("cross-file-ref", PASS, "Partial dependency recalled", latency_ms, 0.5)
+    return EvalResult("cross-file-ref", FAIL, f"Dependency not recalled. Top: {_top_content(results)[:120]}", latency_ms, 0.0)
+
+
+def eval_agent_scope_bleed() -> EvalResult:
+    """3 agents share a project name; verify memories don't bleed between agents."""
+    agent_x = f"{EVAL_AGENT}-proj-x"
+    agent_y = f"{EVAL_AGENT}-proj-y"
+    agent_z = f"{EVAL_AGENT}-proj-z"
+
+    save("Agent X uses black for Python code formatting with line length 88.", agent_id=agent_x, memory_type="preference")
+    save("Agent Y uses ruff for Python code formatting with line length 100.", agent_id=agent_y, memory_type="preference")
+    save("Agent Z uses autopep8 for Python code formatting with line length 79.", agent_id=agent_z, memory_type="preference")
+
+    t0 = time.monotonic()
+    results_x = recall("Python code formatting tool preference", agent_id=agent_x, limit=3)
+    latency_ms = (time.monotonic() - t0) * 1000
+
+    has_black = _contains(results_x, "black")
+    has_ruff = _contains(results_x, "ruff")
+    has_autopep8 = _contains(results_x, "autopep8")
+
+    for ag in [agent_x, agent_y, agent_z]:
+        delete_agent_memories(ag)
+
+    if has_black and not has_ruff and not has_autopep8:
+        return EvalResult("agent-scope-bleed", PASS, "Agent X memory isolated; no bleed from Y or Z", latency_ms, 1.0)
+    if has_ruff or has_autopep8:
+        leaked = []
+        if has_ruff:
+            leaked.append("Y(ruff)")
+        if has_autopep8:
+            leaked.append("Z(autopep8)")
+        return EvalResult("agent-scope-bleed", FAIL, f"Memory leaked from agent(s): {', '.join(leaked)}", latency_ms, 0.0)
+    return EvalResult("agent-scope-bleed", FAIL, f"No scoped memory found. Top: {_top_content(results_x)[:120]}", latency_ms, 0.0)
+
+
 ALL_TASKS = {
     "preference-recall": eval_preference_recall,
     "contradiction-recall": eval_contradiction_recall,
@@ -241,8 +363,104 @@ ALL_TASKS = {
     "scope-isolation": eval_scope_isolation,
     "architecture-recall": eval_architecture_recall,
     "noise-suppression": eval_noise_suppression,
+    "symbol-recall": eval_symbol_recall,
+    "bug-fix-chain": eval_bug_fix_chain,
+    "cross-file-ref": eval_cross_file_ref,
+    "agent-scope-bleed": eval_agent_scope_bleed,
 }
 
+
+# ── LongMemEval-S adapter ─────────────────────────────────────────────────────
+
+def run_longmemeval_s(input_file: str, no_cleanup: bool = False) -> dict:
+    """Run LongMemEval-S benchmark from a JSON input file.
+
+    Input format: [{question, answer, conversation_history: [{role, content}]}]
+    Each sample's conversation_history is ingested as memories, then recalled
+    using the question; result is scored against the expected answer.
+    """
+    try:
+        with open(input_file) as f:
+            samples = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"ERROR: Cannot load {input_file}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not isinstance(samples, list):
+        print("ERROR: LongMemEval-S input must be a JSON array", file=sys.stderr)
+        sys.exit(1)
+
+    lme_agent = f"{EVAL_AGENT}-longmemeval"
+    results = []
+    correct = 0
+
+    for i, sample in enumerate(samples):
+        question = sample.get("question", "")
+        expected = sample.get("answer", "")
+        history = sample.get("conversation_history", [])
+
+        if not question or not expected:
+            if VERBOSE:
+                print(f"  Sample {i}: skipping (missing question or answer)", flush=True)
+            continue
+
+        # Ingest conversation history as memories
+        for turn in history:
+            role = turn.get("role", "user")
+            content = turn.get("content", "")
+            if content:
+                save(
+                    f"[{role}] {content}",
+                    agent_id=lme_agent,
+                    memory_type="observation",
+                    importance=0.6,
+                )
+
+        # Recall and score
+        t0 = time.monotonic()
+        recalled = recall(question, agent_id=lme_agent, limit=5)
+        latency_ms = (time.monotonic() - t0) * 1000
+
+        # Score: check if any recalled memory contains the expected answer
+        top = _top_content(recalled)
+        sim = _similarity(top, expected)
+        exact_hit = expected.lower() in " ".join(r.get("content", "") for r in recalled).lower()
+        score = 1.0 if exact_hit else (sim if sim > 0.5 else 0.0)
+        passed = score >= 0.5
+
+        if passed:
+            correct += 1
+
+        results.append({
+            "index": i,
+            "question": question[:100],
+            "expected": expected[:100],
+            "top_recalled": top[:100],
+            "score": round(score, 3),
+            "latency_ms": round(latency_ms),
+            "passed": passed,
+        })
+
+        if VERBOSE:
+            icon = "✓" if passed else "✗"
+            print(f"  {icon} [{i}] score={score:.2f} {question[:60]}", flush=True)
+
+        if not no_cleanup:
+            delete_agent_memories(lme_agent)
+
+    total = len(results)
+    accuracy = correct / total if total else 0.0
+    output = {
+        "total": total,
+        "correct": correct,
+        "accuracy": round(accuracy, 4),
+        "avg_latency_ms": round(sum(r["latency_ms"] for r in results) / total) if total else 0,
+        "samples": results,
+    }
+    return output
+
+
+# ── Runner ────────────────────────────────────────────────────────────────────
 
 def run_task(name: str, fn) -> EvalResult:
     try:
@@ -260,6 +478,17 @@ def main():
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--no-cleanup", action="store_true", help="Skip pre/post memory cleanup")
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
+    parser.add_argument(
+        "--eval-format",
+        choices=["nexus", "longmemeval-s"],
+        default="nexus",
+        help="Eval format: nexus (built-in tasks) or longmemeval-s (external JSON file)",
+    )
+    parser.add_argument(
+        "--input",
+        metavar="FILE",
+        help="Input file for --eval-format longmemeval-s",
+    )
     args = parser.parse_args()
     VERBOSE = args.verbose
 
@@ -267,13 +496,28 @@ def main():
         print("ERROR: NEXUS_SECRET not set", file=sys.stderr)
         sys.exit(1)
 
-    # Verify connectivity
     try:
         api("GET", "/health")
     except Exception as e:
         print(f"ERROR: Cannot reach Nexus at {NEXUS_URL}: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # ── LongMemEval-S mode ────────────────────────────────────────────────────
+    if args.eval_format == "longmemeval-s":
+        if not args.input:
+            print("ERROR: --input FILE required for --eval-format longmemeval-s", file=sys.stderr)
+            sys.exit(1)
+        output = run_longmemeval_s(args.input, no_cleanup=args.no_cleanup)
+        if args.json:
+            print(json.dumps(output, indent=2))
+        else:
+            acc_pct = output["accuracy"] * 100
+            print(f"\n  LongMemEval-S: {output['correct']}/{output['total']} correct  |  accuracy {acc_pct:.1f}%  |  avg latency {output['avg_latency_ms']}ms")
+            if output["accuracy"] < 0.9:
+                sys.exit(1)
+        return
+
+    # ── Built-in nexus tasks ──────────────────────────────────────────────────
     tasks = {args.task: ALL_TASKS[args.task]} if args.task else ALL_TASKS
 
     if not args.no_cleanup:
@@ -287,7 +531,7 @@ def main():
         results.append(r)
         if not args.json:
             status_icon = "✓" if r.status == PASS else ("?" if r.status == SKIP else "✗")
-            print(f"  {status_icon} {r.task:<25} {r.status:<5}  {r.latency_ms:>6.0f}ms  {r.detail[:80]}")
+            print(f"  {status_icon} {r.task:<28} {r.status:<5}  {r.latency_ms:>6.0f}ms  {r.detail[:80]}")
 
     if not args.no_cleanup:
         delete_agent_memories()
@@ -301,7 +545,11 @@ def main():
         print(json.dumps({
             "passed": passed, "failed": failed, "skipped": skipped,
             "avg_score": round(avg_score, 3),
-            "results": [{"task": r.task, "status": r.status, "detail": r.detail, "latency_ms": round(r.latency_ms), "score": r.score} for r in results],
+            "results": [
+                {"task": r.task, "status": r.status, "detail": r.detail,
+                 "latency_ms": round(r.latency_ms), "score": r.score}
+                for r in results
+            ],
         }, indent=2))
     else:
         print(f"\n  Results: {passed} passed / {failed} failed / {skipped} skipped  |  avg score {avg_score:.2f}")

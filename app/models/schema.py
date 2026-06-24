@@ -79,6 +79,8 @@ class Relation(Base):
     relation_type: Mapped[str] = mapped_column(String(100), nullable=False)
     memory_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("memories.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Conclusion(Base):

@@ -115,8 +115,49 @@ async def list_projects(limit: int = 50, db: AsyncSession = Depends(get_db)):
         text("SELECT key, name, root, created_at, updated_at FROM projects ORDER BY updated_at DESC LIMIT :lim"),
         {"lim": max(1, min(200, limit))},
     )
-    projects = [dict(r._mapping) for r in rows.fetchall()]
+    projects = []
+    for r in rows.fetchall():
+        p = dict(r._mapping)
+        file_count = (await db.execute(
+            text("SELECT COUNT(*) FROM file_index WHERE project_key = :key"),
+            {"key": p["key"]},
+        )).scalar() or 0
+        p["file_count"] = int(file_count)
+        projects.append(p)
     return {"count": len(projects), "projects": projects}
+
+
+@router.get("/projects/{project_key}/files")
+async def list_project_files(
+    project_key: str,
+    language: str | None = None,
+    limit: int = 200,
+    db: AsyncSession = Depends(get_db),
+):
+    """List all indexed files for a project."""
+    key = _normalize_key(project_key)
+    conditions = ["project_key = :key"]
+    params: dict = {"key": key, "lim": max(1, min(500, limit))}
+    if language:
+        conditions.append("language = :lang")
+        params["lang"] = language
+    where = " AND ".join(conditions)
+    rows = await db.execute(
+        text(f"SELECT path, language, size, sha256, symbols, updated_at FROM file_index WHERE {where} ORDER BY updated_at DESC LIMIT :lim"),
+        params,
+    )
+    files = []
+    for r in rows.fetchall():
+        f = dict(r._mapping)
+        # symbols is stored as JSONB — ensure it comes back as a list
+        if isinstance(f.get("symbols"), str):
+            import json as _json
+            try:
+                f["symbols"] = _json.loads(f["symbols"])
+            except Exception:
+                f["symbols"] = []
+        files.append(f)
+    return {"project_key": key, "count": len(files), "files": files}
 
 
 # ── Memory routes (synapse-compat remember/recall signatures) ────────────────

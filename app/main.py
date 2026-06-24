@@ -56,12 +56,33 @@ from app.mcp import mcp_router
 from app.routers.sys_bridge import router as sys_bridge_router
 from app.routers.synapse import router as synapse_router
 from app.routers.compat import router as compat_router
+from app.routers.graph import router as graph_router
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 log = logging.getLogger("nexus")
+
+
+def _setup_otel(app: "FastAPI") -> None:
+    """Initialize OpenTelemetry tracing if OTEL_ENABLED=true."""
+    try:
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+        provider = TracerProvider()
+        provider.add_span_processor(
+            BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.otel_endpoint))
+        )
+        trace.set_tracer_provider(provider)
+        FastAPIInstrumentor.instrument_app(app)
+        log.info("OpenTelemetry tracing enabled → %s", settings.otel_endpoint)
+    except ImportError:
+        log.warning("OTEL_ENABLED=true but opentelemetry packages not installed; skipping")
 
 
 async def _run_migrations():
@@ -84,6 +105,8 @@ async def _run_migrations():
             "ALTER TABLE memories ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ",
             "ALTER TABLE memories ADD COLUMN IF NOT EXISTS extraction_model VARCHAR(100)",
             "ALTER TABLE memories ADD COLUMN IF NOT EXISTS extraction_version VARCHAR(50)",
+            "ALTER TABLE relations ADD COLUMN IF NOT EXISTS valid_from TIMESTAMPTZ NOT NULL DEFAULT NOW()",
+            "ALTER TABLE relations ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ",
         ]:
             try:
                 await conn.execute(text(col_sql))
@@ -113,6 +136,17 @@ async def _run_migrations():
             "CREATE INDEX IF NOT EXISTS idx_memories_tags_gin ON memories USING gin ((metadata->'tags'))",
             "CREATE INDEX IF NOT EXISTS idx_agents_last_active ON agents (last_active DESC)",
             "CREATE INDEX IF NOT EXISTS idx_agents_model ON agents (model)",
+            # FTS index for lexical search (sequential scan fallback without this)
+            "CREATE INDEX IF NOT EXISTS idx_memories_fts ON memories USING gin(to_tsvector('english', content))",
+            # Composite indexes for per-agent temporal + importance queries
+            "CREATE INDEX IF NOT EXISTS idx_memories_agent_time ON memories(agent_id, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_memories_agent_importance ON memories(agent_id, importance DESC)",
+            # Superseded chain lookup
+            "CREATE INDEX IF NOT EXISTS idx_memories_superseded_by ON memories(superseded_by) WHERE superseded_by IS NOT NULL",
+            # Active memory filter (hot path for all four search engines)
+            "CREATE INDEX IF NOT EXISTS idx_memories_active ON memories(id) WHERE superseded_by IS NULL",
+            # Bi-temporal relation index
+            "CREATE INDEX IF NOT EXISTS idx_relations_valid_from ON relations(valid_from)",
         ]:
             try:
                 await conn.execute(text(index_sql))
@@ -299,6 +333,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+if settings.otel_enabled:
+    _setup_otel(app)
+
 _cors_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()] if settings.cors_origins else []
 app.add_middleware(
     CORSMiddleware,
@@ -336,6 +373,7 @@ app.include_router(mcp_router,        prefix="/mcp",           tags=["mcp"],    
 app.include_router(sys_bridge_router,  prefix="/v1/sys",  tags=["sys"],  dependencies=[Depends(_verify_key)])
 app.include_router(synapse_router, prefix="/v1/synapse", tags=["synapse"], dependencies=[Depends(_verify_key)])
 app.include_router(compat_router, prefix="/v1", tags=["compat"], dependencies=[Depends(_verify_key)])
+app.include_router(graph_router,  prefix="/v1",         tags=["graph"],   dependencies=[Depends(_verify_key)])
 
 
 @app.get("/.well-known/nexus/openapi.json", include_in_schema=False)

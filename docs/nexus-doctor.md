@@ -30,6 +30,8 @@ config.json.nexus-backup-YYYYMMDD-HHMMSS
 
 ## What it can connect
 
+### Already implemented
+
 - Claude Desktop
 - Claude Code instruction file
 - Cline standalone
@@ -44,15 +46,22 @@ config.json.nexus-backup-YYYYMMDD-HHMMSS
 - Hermes env bootstrap
 - OpenClaw env bootstrap
 - Devin CLI instruction file
+- Gemini CLI (`~/.gemini/settings.json`)
+- Qwen Code (`~/.qwen/settings.json`, Gemini-compatible format)
+- Codex CLI instructions (`~/.codex/NEXUS.md`)
+- Aider instructions (`~/.aider/NEXUS.md`)
+- Goose env bootstrap (`~/.goose/nexus.env`)
+- Roo Code globalStorage (VS Code/Windsurf/Trae/Antigravity families)
+- Kilo Code standalone globalStorage
+- Project instruction files: `GEMINI.md`, `QWEN.md`
 
-See `docs/agent-target-registry.md` for the expanded registry of additional CLI
-agents, IDEs, editor extensions, autonomous SWE agents, and local agent
-frameworks that Nexus Doctor should support next.
+### Still pending (see agent-target-registry.md)
 
-High-priority next targets include Gemini CLI, Qwen Code, Codex CLI, Goose,
-Continue, Aider, Roo Code, Kilo Code standalone, Zed, GitHub Copilot
-instructions, OpenHands, SWE-agent, CrewAI, LangGraph, AutoGen, Dify, Flowise,
-Langflow, OpenWebUI, LibreChat, and AnythingLLM.
+Continue, Zed, GitHub Copilot instructions, OpenHands, SWE-agent, CrewAI,
+LangGraph, AutoGen, Dify, Flowise, Langflow, OpenWebUI, LibreChat, AnythingLLM,
+PearAI, Amp, Augment Code, JetBrains AI Assistant.
+
+Full target list and integration backlog in `docs/agent-target-registry.md`.
 
 ## Configuration sources
 

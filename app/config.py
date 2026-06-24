@@ -35,8 +35,20 @@ class Settings(BaseSettings):
     learning_interval: int = 300
 
     reranker_enabled: bool = False
-    reranker_provider: str = "none"  # none | llm
+    reranker_provider: str = "none"  # none | llm | local
     rerank_top_k: int = 30
+    reranker_local_model: str = "cross-encoder/ms-marco-MiniLM-L-12-v2"
+    reranker_batch_size: int = 16
+
+    confidence_decay_rate: float = 0.95
+    confidence_decay_interval_days: int = 7
+    confidence_floor: float = 0.1
+
+    otel_enabled: bool = False
+    otel_endpoint: str = "http://localhost:4318/v1/traces"
+
+    allow_agent_export: bool = True
+    allow_agent_forget: bool = True
 
     model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore"}
 

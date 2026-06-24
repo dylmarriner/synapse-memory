@@ -433,10 +433,29 @@ raw sessions and displays selected session metadata plus raw message timeline.
 - Architecture decision cards.
 - Codebase hotspot cards.
 
-### UI Phase 6 — Full React/Vite app
+Backend APIs needed:
+- `GET /v1/projects` — list indexed projects.
+- `GET /v1/projects/{key}/files` — list file_index entries.
+- `GET /v1/projects/{key}/rules` ✓ (implemented in synapse router).
+- `GET /v1/projects/{key}/events` — project-scoped event log.
+
+Graph explorer can use SVG or Cytoscape.js; does not require a build pipeline.
+
+### UI Phase 6 — Memory quality + OTEL observability tab
+
+- Confidence distribution chart (bar or histogram).
+- Decay pass stats: last run, memories decayed, avg new confidence.
+- Contradiction rate over time.
+- OTEL trace viewer link (if OTEL_ENABLED).
+
+Backend needed: `GET /v1/admin/memory-quality` (not yet implemented — in battle plan Sprint 5).
+
+### UI Phase 7 — Full React/Vite app (optional)
 
 - Move from zero-build HTML to SPA if needed.
 - Add routing, graph canvas, charts, persistent filters, keyboard shortcuts.
+- Recommended stack: Vite + React + TypeScript + Tailwind + TanStack Query +
+  Recharts + Cytoscape.js.
 
 ## Immediate quick wins
 

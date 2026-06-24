@@ -118,18 +118,21 @@ These should receive Nexus + RTK guidance where appropriate:
 
 ## Doctor implementation backlog
 
-1. Add a declarative target registry JSON/YAML so targets can be added without
-   editing Python logic. Implemented as `integrations/doctor/targets.json`.
-2. Add deeper recursive config discovery for VS Code-compatible `globalStorage`
-   and unknown extension IDs. Initial known-extension discovery is implemented.
-3. Add Gemini CLI MCP writer for `~/.gemini/settings.json`. Implemented in
-   Nexus Doctor.
-4. Add Qwen Code MCP writer after confirming settings format. Initial
-   Gemini-compatible `~/.qwen/settings.json` writer is implemented.
-5. Add Goose MCP extension writer after confirming config path/format.
-6. Add project instruction updater for `AGENTS.md`, `GEMINI.md`, `CLAUDE.md`,
-   `.github/copilot-instructions.md`, `.cursor/rules`, `.windsurfrules`.
-7. Add OpenHands/SWE-agent container env templates.
-8. Add low-code OpenAPI import docs/templates for Dify, Flowise, Langflow, n8n,
-   OpenWebUI, LibreChat, AnythingLLM. Initial templates are in
-   `integrations/low-code/`.
+1. ✓ Declarative target registry JSON: `integrations/doctor/targets.json`.
+2. ✓ Recursive VS Code-compatible `globalStorage` discovery for known extension IDs.
+3. ✓ Gemini CLI MCP writer for `~/.gemini/settings.json`.
+4. ✓ Qwen Code MCP writer (`~/.qwen/settings.json`, Gemini-compatible format).
+5. ✓ Goose env bootstrap writer (`~/.goose/nexus.env`).
+6. ✓ Codex CLI + Aider instruction file writers.
+7. ✓ Roo Code and Kilo Code globalStorage writers across IDE families.
+8. ✓ `GEMINI.md` and `QWEN.md` project instruction updaters.
+9. ✓ Low-code OpenAPI templates in `integrations/low-code/` (Dify, Flowise,
+      Langflow, n8n, OpenWebUI, LibreChat, AnythingLLM).
+10. ✗ OpenHands/SWE-agent container env templates.
+11. ✗ Continue.dev config writer (`.continue/` format — needs confirmation).
+12. ✗ Zed context server writer (`~/.config/zed/settings.json`).
+13. ✗ GitHub Copilot instructions writer (`.github/copilot-instructions.md`).
+14. ✗ JetBrains AI Assistant integration (format needs investigation).
+15. ✗ Amp config writer (`~/.config/amp/settings.json` — detected on dev machine,
+       format not yet confirmed).
+16. ✗ PearAI config writer (VS Code-compatible; check `~/.config/PearAI/User`).

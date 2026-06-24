@@ -148,7 +148,7 @@ agent shell command → rtk filter → compact output to LLM
 
 ## Implementation phases
 
-### Phase 1 — Raw session/event memory
+### Phase 1 — Raw session/event memory ✓ Implemented
 
 Add first-class append-only storage:
 
@@ -158,10 +158,12 @@ Add first-class append-only storage:
 
 Endpoints/tools:
 
-- `POST /v1/sessions/start`
-- `POST /v1/sessions/{id}/messages`
-- `POST /v1/sessions/{id}/end`
-- MCP: `session_start`, `session_append`, `session_end_extract`
+- `POST /v1/sessions/start` ✓
+- `POST /v1/sessions/{id}/messages` ✓
+- `POST /v1/sessions/{id}/end` ✓
+- `GET /v1/sessions` ✓
+- `GET /v1/sessions/{id}` (with messages) ✓
+- MCP: `session_start`, `session_append`, `session_end_extract` ✓
 
 Why this beats competitors:
 
@@ -309,25 +311,30 @@ High-priority connector targets are tracked in `docs/agent-target-registry.md`.
 
 ## Immediate next tasks
 
-1. Create migrations for `sessions`, `messages`, and `memory_sources`. Initial
-   migration and startup DDL implemented.
-2. Add session REST endpoints and MCP tools. Initial REST endpoints and MCP tools
-   implemented.
-3. Update hooks to append raw user/assistant/session events. Initial SessionStart,
-   UserPromptSubmit, and Stop hook appends implemented.
-4. Link extracted memories back to source messages. Initial `memory_sources`
-   linking implemented for session extraction.
-5. Add `/v1/agents/{id}/card` using existing summaries/conclusions/memories.
-   Implemented initial Honcho-style agent card endpoint.
-6. Add `/v1/admin/metrics` and RTK gain capture. Initial dashboard metrics
-   endpoint implemented; RTK event capture is active via `/v1/rtk/events`.
-7. Expand `/v1/rtk/events` into dashboard-visible command telemetry and optional
-   hook/proxy integration for agents that support command wrappers. Added RTK
-   summary and timeseries admin endpoints for dashboard cards/charts.
-8. Expand Nexus Doctor using `docs/agent-target-registry.md`: Gemini CLI, Qwen
-   Code, Codex CLI, Goose, Continue, Aider, Roo/Kilo/Kade variants, project
-   instruction files, OpenHands/SWE-agent env templates, and OpenAPI templates
-   for low-code agent builders.
+All original next tasks are complete. See `docs/implementation-battle-plan.md` for
+the current sprint plan covering 12 remaining items needed to dominate all
+competitors.
+
+Status of original tasks:
+
+1. ✓ Create migrations for `sessions`, `messages`, `memory_sources`.
+2. ✓ Add session REST endpoints and MCP tools.
+3. ✓ Update hooks to append raw user/assistant/session events.
+4. ✓ Link extracted memories back to source messages.
+5. ✓ Add `/v1/agents/{id}/card`.
+6. ✓ Add `/v1/admin/metrics` and RTK gain capture.
+7. ✓ RTK summary and timeseries admin endpoints.
+8. ✓ Nexus Doctor: Gemini CLI, Qwen Code, Codex CLI, Goose, Roo/Kilo variants,
+      project instruction files, OpenHands/SWE-agent env templates, low-code
+      OpenAPI templates.
+
+## Remaining battle plan (see docs/implementation-battle-plan.md)
+
+Sprint 1 (benchmarks): LongMemEval-S adapter, coding-specific evals
+Sprint 2 (recall): local cross-encoder reranker, confidence decay, bi-temporal edges
+Sprint 3 (observability+privacy): OTEL instrumentation, export+forget endpoints
+Sprint 4 (infra/DX): agent peer merge, embedded install mode, tree-sitter AST indexing
+Sprint 5 (dashboard+federation): memory quality dashboard, P2P agent federation
 
 ## RTK role
 

@@ -478,3 +478,165 @@ async def discover_agents(
             "min_sessions": min_sessions,
         }
     }
+
+
+# ── Privacy / GDPR endpoints ──────────────────────────────────────────────────
+
+@router.get("/{agent_id}/export")
+async def export_agent_data(agent_id: str, db: AsyncSession = Depends(get_db)):
+    """Export all data for an agent as JSON (GDPR Article 20 — data portability)."""
+    from app.config import settings as _s
+    if not _s.allow_agent_export:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Agent data export is disabled")
+
+    agent = await get_or_create(db, agent_id)
+    aid = agent["id"] if isinstance(agent, dict) else str(agent.id)
+
+    memories = (await db.execute(text("""
+        SELECT id, content, memory_type, importance, confidence, access_count,
+               confirmed_count, contradicted_count, created_at, metadata
+        FROM memories WHERE agent_id = CAST(:aid AS uuid) ORDER BY created_at DESC
+    """), {"aid": aid})).fetchall()
+
+    entities = (await db.execute(text("""
+        SELECT id, name, entity_type, created_at
+        FROM entities WHERE agent_id = CAST(:aid AS uuid) ORDER BY created_at DESC
+    """), {"aid": aid})).fetchall()
+
+    sessions = (await db.execute(text("""
+        SELECT id, title, project_key, started_at, ended_at, metadata
+        FROM sessions WHERE agent_id = CAST(:aid AS uuid) ORDER BY started_at DESC
+    """), {"aid": aid})).fetchall()
+
+    conclusions = (await db.execute(text("""
+        SELECT id, content, conclusion_type, created_at
+        FROM conclusions WHERE agent_id = CAST(:aid AS uuid) ORDER BY created_at DESC
+    """), {"aid": aid})).fetchall()
+
+    from datetime import datetime, timezone
+
+    def _row(r):
+        d = dict(r._mapping)
+        for k, v in d.items():
+            if isinstance(v, datetime):
+                d[k] = v.isoformat()
+            elif hasattr(v, "hex"):
+                d[k] = str(v)
+        return d
+
+    return {
+        "agent": {"id": aid, "name": agent_id},
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "memories": [_row(r) for r in memories],
+        "entities": [_row(r) for r in entities],
+        "sessions": [_row(r) for r in sessions],
+        "conclusions": [_row(r) for r in conclusions],
+        "counts": {
+            "memories": len(memories),
+            "entities": len(entities),
+            "sessions": len(sessions),
+            "conclusions": len(conclusions),
+        },
+    }
+
+
+@router.post("/{agent_id}/forget")
+async def forget_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
+    """Permanently delete all data for an agent (GDPR Article 17 — right to erasure)."""
+    from app.config import settings as _s
+    if not _s.allow_agent_forget:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Agent data deletion is disabled")
+
+    agent_row = (await db.execute(text(
+        "SELECT id FROM agents WHERE name = :name LIMIT 1"
+    ), {"name": agent_id})).fetchone()
+
+    if not agent_row:
+        return {"deleted": False, "reason": "agent not found", "agent": agent_id}
+
+    aid = agent_row.id
+
+    mem_count = (await db.execute(text(
+        "DELETE FROM memories WHERE agent_id = :aid RETURNING id"
+    ), {"aid": aid})).rowcount
+
+    ent_count = (await db.execute(text(
+        "DELETE FROM entities WHERE agent_id = :aid RETURNING id"
+    ), {"aid": aid})).rowcount
+
+    con_count = (await db.execute(text(
+        "DELETE FROM conclusions WHERE agent_id = :aid RETURNING id"
+    ), {"aid": aid})).rowcount
+
+    ses_count = (await db.execute(text(
+        "DELETE FROM sessions WHERE agent_id = :aid RETURNING id"
+    ), {"aid": aid})).rowcount
+
+    await db.execute(text("DELETE FROM agents WHERE id = :aid"), {"aid": aid})
+    await db.commit()
+
+    return {
+        "deleted": True,
+        "agent": agent_id,
+        "deleted_memories": mem_count,
+        "deleted_entities": ent_count,
+        "deleted_conclusions": con_count,
+        "deleted_sessions": ses_count,
+    }
+
+
+# ── Agent identity resolution / peer merge ────────────────────────────────────
+
+class AgentResolveRequest(BaseModel):
+    primary: str
+    duplicates: list[str]
+
+
+@router.post("/resolve")
+async def resolve_agents(body: AgentResolveRequest, db: AsyncSession = Depends(get_db)):
+    """Merge duplicate agent memories into a primary agent and delete duplicates."""
+    if not body.duplicates:
+        return {"merged_into": body.primary, "removed_agents": [], "moved": {}}
+
+    primary_row = (await db.execute(text(
+        "SELECT id FROM agents WHERE name = :name LIMIT 1"
+    ), {"name": body.primary})).fetchone()
+    if not primary_row:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Primary agent '{body.primary}' not found")
+
+    primary_id = primary_row.id
+    moved: dict = {"memories": 0, "entities": 0, "sessions": 0}
+    removed = []
+
+    for dup_name in body.duplicates:
+        dup_row = (await db.execute(text(
+            "SELECT id FROM agents WHERE name = :name LIMIT 1"
+        ), {"name": dup_name})).fetchone()
+        if not dup_row:
+            continue
+
+        dup_id = dup_row.id
+
+        r = await db.execute(text(
+            "UPDATE memories SET agent_id = :primary WHERE agent_id = :dup RETURNING id"
+        ), {"primary": primary_id, "dup": dup_id})
+        moved["memories"] += r.rowcount
+
+        r = await db.execute(text(
+            "UPDATE entities SET agent_id = :primary WHERE agent_id = :dup RETURNING id"
+        ), {"primary": primary_id, "dup": dup_id})
+        moved["entities"] += r.rowcount
+
+        r = await db.execute(text(
+            "UPDATE sessions SET agent_id = :primary WHERE agent_id = :dup RETURNING id"
+        ), {"primary": primary_id, "dup": dup_id})
+        moved["sessions"] += r.rowcount
+
+        await db.execute(text("DELETE FROM agents WHERE id = :id"), {"id": dup_id})
+        removed.append(dup_name)
+
+    await db.commit()
+    return {"merged_into": body.primary, "removed_agents": removed, "moved": moved}

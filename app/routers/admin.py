@@ -433,3 +433,63 @@ async def get_consolidation_report():
     return {"message": "No consolidation report available yet"}
 
 
+@router.get("/admin/memory-quality")
+async def memory_quality(db: AsyncSession = Depends(get_db)):
+    """Memory health dashboard: confidence distribution, decay stats, contradiction rates."""
+    totals = (await db.execute(text("""
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE superseded_by IS NOT NULL) AS superseded_count,
+            COUNT(*) FILTER (WHERE valid_until IS NOT NULL AND valid_until < NOW()) AS expired_count,
+            COALESCE(AVG(confidence), 0) AS avg_confidence,
+            COALESCE(AVG(importance), 0) AS avg_importance,
+            COALESCE(SUM(confirmed_count), 0) AS total_confirmed,
+            COALESCE(SUM(contradicted_count), 0) AS total_contradicted
+        FROM memories
+    """))).fetchone()
+
+    # Confidence distribution in 5 buckets
+    dist_rows = (await db.execute(text("""
+        SELECT
+            COUNT(*) FILTER (WHERE confidence < 0.2) AS "0.0-0.2",
+            COUNT(*) FILTER (WHERE confidence >= 0.2 AND confidence < 0.4) AS "0.2-0.4",
+            COUNT(*) FILTER (WHERE confidence >= 0.4 AND confidence < 0.6) AS "0.4-0.6",
+            COUNT(*) FILTER (WHERE confidence >= 0.6 AND confidence < 0.8) AS "0.6-0.8",
+            COUNT(*) FILTER (WHERE confidence >= 0.8) AS "0.8-1.0"
+        FROM memories
+        WHERE superseded_by IS NULL
+    """))).fetchone()
+    confidence_distribution = dict(dist_rows._mapping) if dist_rows else {}
+
+    # Memory counts by type
+    type_rows = (await db.execute(text("""
+        SELECT memory_type, COUNT(*) AS count
+        FROM memories WHERE superseded_by IS NULL
+        GROUP BY memory_type ORDER BY count DESC
+    """))).fetchall()
+    memories_by_type = {r.memory_type: int(r.count) for r in type_rows}
+
+    # Top agents by memory count
+    agent_rows = (await db.execute(text("""
+        SELECT a.name, COUNT(m.id) AS count
+        FROM agents a
+        JOIN memories m ON m.agent_id = a.id
+        WHERE m.superseded_by IS NULL
+        GROUP BY a.name ORDER BY count DESC LIMIT 10
+    """))).fetchall()
+    top_agents = [{"agent": r.name, "count": int(r.count)} for r in agent_rows]
+
+    return {
+        "total_memories": int(totals.total or 0),
+        "superseded_count": int(totals.superseded_count or 0),
+        "expired_count": int(totals.expired_count or 0),
+        "avg_confidence": round(float(totals.avg_confidence or 0), 4),
+        "avg_importance": round(float(totals.avg_importance or 0), 4),
+        "total_confirmed": int(totals.total_confirmed or 0),
+        "total_contradicted": int(totals.total_contradicted or 0),
+        "confidence_distribution": {k: int(v or 0) for k, v in confidence_distribution.items()},
+        "memories_by_type": memories_by_type,
+        "top_agents_by_memory_count": top_agents,
+    }
+
+

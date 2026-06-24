@@ -2,9 +2,16 @@
 
 import asyncio
 import logging
+import time
 from fastapi import APIRouter, HTTPException, Request, Depends
 
 log = logging.getLogger("nexus.routers.memory")
+
+try:
+    from opentelemetry import trace as _otel_trace
+    _tracer = _otel_trace.get_tracer("nexus.memory")
+except ImportError:
+    _tracer = None
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import text
@@ -124,7 +131,16 @@ async def recall(body: MemoryRecallRequest):
         task = asyncio.create_task(_bump_async([m.id for m in fused]))
         task.add_done_callback(lambda t: log.warning("bump_access failed: %s", t.exception()) if t.exception() else None)
 
-    fusion_label = "rrf+llm-rerank" if __import__("app.config", fromlist=["settings"]).settings.reranker_enabled else "rrf"
+    from app.config import settings as _s
+    fusion_label = f"rrf+{_s.reranker_provider}-rerank" if _s.reranker_enabled else "rrf"
+
+    if _tracer:
+        span = _otel_trace.get_current_span()
+        span.set_attribute("nexus.recall.agent_id", body.agent_id or "")
+        span.set_attribute("nexus.recall.modes", ",".join(used))
+        span.set_attribute("nexus.recall.result_count", len(fused))
+        span.set_attribute("nexus.recall.reranker", fusion_label)
+
     return MemoryRecallResponse(results=fused, total=len(fused), modes_used=used, fusion=fusion_label)
 
 

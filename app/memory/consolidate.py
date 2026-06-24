@@ -7,6 +7,8 @@ from typing import Dict, List, Tuple, Optional
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
+
 log = logging.getLogger("nexus.memory.consolidate")
 
 SIMILARITY_THRESHOLD = 0.92
@@ -14,14 +16,15 @@ SIMILARITY_THRESHOLD = 0.92
 
 async def consolidate(db: AsyncSession) -> Dict[str, int]:
     """
-    Five-pass consolidation:
+    Six-pass consolidation:
     1. Smart importance auto-scaling - boost memories recalled multiple times in conversation
     2. Boost importance of frequently accessed memories
     3. Decay importance of memories not accessed in 30+ days
     4. Remove exact content duplicates (keep newest per agent)
     5. Semantic deduplication via embedding cosine similarity
+    6. Confidence decay — weekly decay for aging memories
     """
-    stats: Dict[str, int] = {"context_boosted": 0, "boosted": 0, "decayed": 0, "deduplicated": 0, "semantic_deduped": 0}
+    stats: Dict[str, int] = {"context_boosted": 0, "boosted": 0, "decayed": 0, "deduplicated": 0, "semantic_deduped": 0, "confidence_decayed": 0}
 
     # Pass 1: Smart importance auto-scaling - boost memories recalled frequently in recent context
     try:
@@ -131,6 +134,28 @@ async def consolidate(db: AsyncSession) -> Dict[str, int]:
             stats["semantic_deduped"] = len(to_drop)
     except Exception as e:
         log.warning("Semantic dedup pass failed: %s", e)
+
+    # Pass 6: Confidence decay — weekly decay for memories older than interval_days
+    try:
+        r = await db.execute(
+            text("""
+                UPDATE memories
+                SET confidence = GREATEST(:floor, confidence * :rate)
+                WHERE created_at < NOW() - INTERVAL '1 day' * :interval_days
+                  AND superseded_by IS NULL
+                  AND confidence > :floor
+                RETURNING id
+            """),
+            {
+                "floor": settings.confidence_floor,
+                "rate": settings.confidence_decay_rate,
+                "interval_days": settings.confidence_decay_interval_days,
+            },
+        )
+        stats["confidence_decayed"] = len(r.fetchall())
+        await db.commit()
+    except Exception as e:
+        log.warning("Confidence decay pass failed: %s", e)
 
     log.info("Consolidation: %s", stats)
     return stats

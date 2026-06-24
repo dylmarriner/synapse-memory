@@ -45,6 +45,10 @@ async def graph_search(
         JOIN relations r  ON r.memory_id = m.id
         JOIN entities e   ON e.id = r.from_entity_id OR e.id = r.to_entity_id
         WHERE ({entity_condition}) {agent_filter}
+          AND m.superseded_by IS NULL
+          AND (m.valid_until IS NULL OR m.valid_until > NOW())
+          AND r.valid_from <= NOW()
+          AND (r.valid_until IS NULL OR r.valid_until > NOW())
         ORDER BY m.id, m.importance DESC, m.created_at DESC
         LIMIT :limit
     """)
