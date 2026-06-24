@@ -4,6 +4,10 @@
 connect to, checks local Nexus/RTK health, and can automatically write supported
 configuration files.
 
+For multi-computer setup, install Tailscale on the Nexus host and every agent
+computer, then run Nexus Doctor on each agent computer with the host's Tailscale
+URL. See [`agent-connection-tailscale.md`](agent-connection-tailscale.md).
+
 Default mode is safe and read-only:
 
 ```bash
@@ -51,15 +55,17 @@ config.json.nexus-backup-YYYYMMDD-HHMMSS
 - Codex CLI instructions (`~/.codex/NEXUS.md`)
 - Aider instructions (`~/.aider/NEXUS.md`)
 - Goose env bootstrap (`~/.goose/nexus.env`)
+- OpenHands env bootstrap (`~/.openhands/nexus.env`)
+- SWE-agent env bootstrap (`~/.swe-agent/nexus.env`)
 - Roo Code globalStorage (VS Code/Windsurf/Trae/Antigravity families)
 - Kilo Code standalone globalStorage
 - Project instruction files: `GEMINI.md`, `QWEN.md`
 
 ### Still pending (see agent-target-registry.md)
 
-Continue, Zed, GitHub Copilot instructions, OpenHands, SWE-agent, CrewAI,
-LangGraph, AutoGen, Dify, Flowise, Langflow, OpenWebUI, LibreChat, AnythingLLM,
-PearAI, Amp, Augment Code, JetBrains AI Assistant.
+Continue, Zed, CrewAI, LangGraph, AutoGen, PearAI, Amp, Augment Code, and
+JetBrains AI Assistant. Low-code OpenAPI templates exist for Dify, Flowise,
+Langflow, n8n, OpenWebUI, LibreChat, and AnythingLLM.
 
 Full target list and integration backlog in `docs/agent-target-registry.md`.
 

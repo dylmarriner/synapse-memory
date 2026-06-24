@@ -2,6 +2,9 @@
 
 Nexus is now usable by any AI agent that can call **MCP**, **OpenAPI**, **REST**, **plugins**, or **skills/instructions**.
 
+For cross-computer setup through Tailscale, see
+[`docs/agent-connection-tailscale.md`](docs/agent-connection-tailscale.md).
+
 ## Endpoints
 
 - Dashboard: `http://100.93.75.87:7777/`
@@ -31,12 +34,24 @@ Authorization: Bearer <NEXUS_SECRET>
 | Anything prompt/skill based | `integrations/skills/nexus-memory-skill.md` |
 | Anything plugin-manifest based | `integrations/plugins/universal-agent-plugin.manifest.json` |
 
+## Auto-connect supported local agents
+
+Use Nexus Doctor on each computer that runs agents:
+
+```bash
+scripts/nexus-doctor --nexus-url http://100.93.75.87:7777
+scripts/nexus-doctor --apply --nexus-url http://100.93.75.87:7777 --secret "$NEXUS_SECRET"
+```
+
+It writes supported MCP, env, and instruction configs with backups. See
+[`docs/nexus-doctor.md`](docs/nexus-doctor.md) for the current target list.
+
 ## MCP stdio bridge
 
 Many tools cannot connect directly to HTTP MCP and require a local stdio process. Use:
 
 ```bash
-python3 /media/kubuntux/DEVELOPMENT1/shared-memory/nexus/scripts/adapters/nexus_mcp_stdio.py
+python3 /path/to/synapse-memory/scripts/adapters/nexus_mcp_stdio.py
 ```
 
 Environment variables:
@@ -87,7 +102,7 @@ curl -X POST http://100.93.75.87:7777/v1/memory/save \
     "memory_type":"world",
     "importance":0.7,
     "tags":["nexus","dashboard"],
-    "metadata":{"device":"kubuntux","source":"cline","workspace":"/media/kubuntux/DEVELOPMENT1/shared-memory/nexus"}
+    "metadata":{"device":"workstation","source":"cline","workspace":"/path/to/synapse-memory"}
   }'
 ```
 

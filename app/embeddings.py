@@ -89,35 +89,31 @@ async def get_embedding(text: str) -> Optional[List[float]]:
 
     # Generate embedding via API or local model
     client = _openai()
-    if client is None:
-        embedder = _get_local_embedder()
-        if embedder is not None:
-            try:
-                emb = list(embedder.embed(text.replace("\n", " ")[:8000]))
-                return emb[0].tolist() if hasattr(emb[0], 'tolist') else list(emb[0])
-            except Exception as e:
-                log.warning("Local embedding failed: %s", e)
-        return None
-    try:
-        resp = await client.embeddings.create(
-            input=[text.replace("\n", " ")[:8000]],
-            model=settings.embedding_model,
-        )
-        embedding = resp.data[0].embedding
 
-        # Cache in Redis for 24 hours
+    # Skip API embedding if using a local model name (fastembed) — prevents
+    # pointless 404s to DeepSeek/OpenAI for models they don't support.
+    _LOCAL_EMBEDDING_PREFIXES = ("BAAI/", "sentence-transformers/", "intfloat/", "mixedbread-ai/")
+    if client is not None and not settings.embedding_model.startswith(_LOCAL_EMBEDDING_PREFIXES):
         try:
-            if _redis:
-                import json
-                await _redis.setex(cache_key, 86400, json.dumps(embedding))
-        except Exception:
-            pass
+            resp = await client.embeddings.create(
+                input=[text.replace("\n", " ")[:8000]],
+                model=settings.embedding_model,
+            )
+            embedding = resp.data[0].embedding
 
-        return embedding
-    except Exception as e:
-        log.warning("Embedding failed: %s - trying local model", e)
+            # Cache in Redis for 24 hours
+            try:
+                if _redis:
+                    import json
+                    await _redis.setex(cache_key, 86400, json.dumps(embedding))
+            except Exception:
+                pass
 
-    # Fallback: local ONNX model (no API key needed)
+            return embedding
+        except Exception as e:
+            log.warning("Embedding API failed: %s - trying local model", e)
+
+    # Local ONNX model (no API key needed)
     embedder = _get_local_embedder()
     if embedder is not None:
         try:

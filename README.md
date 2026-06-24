@@ -31,6 +31,7 @@
   <a href="#-architecture">Architecture</a> •
   <a href="#-api">API</a> •
   <a href="#-client-integration">Clients</a> •
+  <a href="docs/agent-connection-tailscale.md">Tailscale</a> •
   <a href="#-deployment">Deployment</a> •
   <a href="#-development">Development</a> •
   <a href="docs/architecture.html">Diagram →</a>
@@ -196,6 +197,17 @@ Full OpenAPI spec at `/.well-known/nexus/openapi.json` when running.
 
 ## 🔌 Client Integration
 
+Use [`docs/agent-connection-tailscale.md`](docs/agent-connection-tailscale.md)
+for the full cross-computer setup guide, including Tailscale, Nexus Doctor,
+HTTP MCP, stdio MCP, REST/OpenAPI, and per-agent instructions.
+
+For local auto-configuration, run:
+
+```bash
+scripts/nexus-doctor
+scripts/nexus-doctor --apply --nexus-url http://<tailscale-host>:7777 --secret "$NEXUS_SECRET"
+```
+
 ### Hermes Agent
 ```bash
 hermes mcp add nexus --url http://<host>:7777/mcp --auth header
@@ -306,6 +318,9 @@ nexus/
 
 - [Architecture Diagram](docs/architecture.html) — interactive SVG
 - [Integration Guide](UNIVERSAL_AGENT_INTEGRATION.md)
+- [Agent + Tailscale Connection Guide](docs/agent-connection-tailscale.md)
+- [Nexus Doctor](docs/nexus-doctor.md)
+- [RTK Integration](docs/rtk-integration.md)
 - [MCP Plugin Examples](integrations/plugins/)
 - [Agent Skills](integrations/skills/)
 - [SDK Documentation](sdk/)

@@ -637,7 +637,7 @@ async def _dispatch(tool: str, args: dict, request: Request) -> str:
     if auth := request.headers.get("Authorization"):
         headers["Authorization"] = auth
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=300.0) as client:
         if tool == "memory_save":
             r = await client.post(f"{base}/v1/memory/save", json=args, headers=headers)
             r.raise_for_status()

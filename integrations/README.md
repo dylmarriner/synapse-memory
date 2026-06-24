@@ -2,6 +2,10 @@
 
 This folder makes Nexus connectable to nearly any AI agent runtime.
 
+For a complete guide to connecting agents on the same machine or on different
+computers over Tailscale, see
+[`../docs/agent-connection-tailscale.md`](../docs/agent-connection-tailscale.md).
+
 ## Files
 
 ```text
@@ -18,7 +22,7 @@ skills/nexus-memory-skill.md       Prompt/skill instructions for agents without 
 Use this with agents that support MCP via local command:
 
 ```bash
-python3 /media/kubuntux/DEVELOPMENT1/shared-memory/nexus/scripts/adapters/nexus_mcp_stdio.py
+python3 /path/to/synapse-memory/scripts/adapters/nexus_mcp_stdio.py
 ```
 
 Recommended env:
@@ -93,7 +97,8 @@ scripts/nexus-doctor --apply
 Supported targets include Claude Desktop/Code, Cline, Windsurf, Antigravity,
 Trae, VS Code, Cursor, Gemini CLI, Qwen Code, Codex CLI, Aider, OpenCode,
 Paperclip AI, Goose, OpenHands, SWE-agent, Hermes, OpenClaw, Devin CLI, and
-project instruction files where discoverable.
+project instruction files where discoverable. Run it on each Tailscale-connected
+computer that needs local agent configs.
 
 Additional targets can be added declaratively in:
 

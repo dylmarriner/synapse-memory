@@ -34,27 +34,30 @@ Integration classes:
 | Hermes | agent runtime | env bootstrap/plugin | `~/.hermes/nexus.env` |
 | OpenClaw | agent runtime | env bootstrap/plugin | `~/.openclaw/nexus.env` |
 | Devin CLI | CLI agent | instructions | `~/.devin/NEXUS.md` |
+| Gemini CLI | CLI agent | MCP settings + instructions | `~/.gemini/settings.json`, `GEMINI.md` |
+| Qwen Code | CLI/IDE/Desktop agent | MCP settings + instructions | `~/.qwen/settings.json`, `QWEN.md` |
+| Codex CLI | CLI agent | instructions | `~/.codex/NEXUS.md`, project `AGENTS.md` |
+| Aider | CLI pair programmer | instructions | `~/.aider/NEXUS.md` |
+| Goose | desktop/CLI/API agent | env bootstrap | `~/.goose/nexus.env` |
+| OpenHands | autonomous SWE agent | env bootstrap | `~/.openhands/nexus.env` |
+| SWE-agent | autonomous SWE agent | env bootstrap | `~/.swe-agent/nexus.env` |
+| Roo Code | VS Code extension | MCP config | VS Code-compatible `globalStorage` paths |
+| Kilo Code standalone | VS Code extension | MCP config | VS Code-compatible `globalStorage` paths |
+| VSCodium / VS Code Insiders | IDE | MCP HTTP | User `mcp.json` |
+| PearAI Cline | IDE extension | MCP HTTP | Cline globalStorage path |
+| Low-code templates | agent builders | REST/OpenAPI instructions | `integrations/low-code/` |
 
 ## High-priority targets to add next
 
 | Target | Category | Likely integration | Notes / likely paths |
 |---|---|---|---|
-| Gemini CLI | CLI agent | MCP + `GEMINI.md` instructions | Supports MCP servers in `~/.gemini/settings.json`; persistent context via `GEMINI.md`. Add Nexus MCP and RTK wrapper guidance. |
-| Qwen Code | CLI/IDE/Desktop agent | MCP + instructions + hooks | Feature parity with Claude Code; supports MCP, hooks, auto-memory, skills, VS Code/Zed/JetBrains/Desktop/daemon. Likely `~/.qwen/settings.json`, `.qwen/`, `AGENTS.md`. |
-| Codex CLI | CLI agent | `AGENTS.md` / `.codex` instructions | OpenAI terminal coding agent. Repo uses `AGENTS.md` and `.codex/`; config needs deeper confirmation. |
-| Goose | desktop/CLI/API agent | MCP extension | Supports 70+ MCP extensions, desktop, CLI, API. Likely `~/.config/goose` or `~/.goose`; add Nexus MCP extension. |
 | Continue.dev | VS Code/JetBrains/CLI | config/instructions/custom tools | Open-source coding agent, final 2.0.0; uses `.continue/` and config. Add Nexus instructions and possible REST/MCP tool if supported. |
-| Aider | CLI pair programmer | repo instructions/env/wrapper | Terminal agent; no obvious MCP from repo summary. Add `.aider.conf.yml` or repo conventions if confirmed, plus RTK wrapper guidance. |
-| Roo Code | VS Code extension | MCP config | Cline fork/family; likely similar globalStorage config. Search extension IDs: `rooveterinaryinc.roo-cline`, `roo-code`. |
-| Kilo Code standalone | VS Code extension | MCP config | Already partially via Windsurf. Add VS Code/Trae/Antigravity patterns for `kilocode.kilo-code`. |
 | Continue in JetBrains | IDE plugin | config/instructions | JetBrains plugin config path needs confirmation. |
 | Zed Assistant | IDE | context server / settings / instructions | Zed has `.zed/`, `.agents/`, `AGENTS.md`; investigate exact MCP/context-server settings. |
 | JetBrains AI Assistant | IDE | unknown/manual | May support MCP indirectly or only plugin-specific settings. Needs confirmation. |
 | GitHub Copilot Chat / Agent | IDE extension | instructions only | No general MCP config. Add workspace instructions (`.github/copilot-instructions.md`) and RTK/Nexus guidance. |
 | Sourcegraph Cody | IDE extension | instructions/context | Cody repo URL changed; investigate extension config and custom context support. |
 | Tabby | self-hosted assistant | IDE/server config | Strong self-hosted assistant. More completion/chat than agent tools; add instructions/context if possible. |
-| OpenHands / Agent Canvas | autonomous SWE agent | REST/env/tool config | Has local REST agent server/canvas. Add Nexus env/bootstrap and custom tool docs. |
-| SWE-agent | autonomous SWE benchmark agent | env/instructions | Add Nexus env and RTK wrapper to workspace/container. |
 | AutoCodeRover | autonomous SWE agent | env/instructions | Add Nexus env and RTK wrapper. |
 | smol-ai/developer | autonomous codegen | env/instructions | Add Nexus memory instructions. |
 | MetaGPT | multi-agent framework | env/tool module | Add Nexus REST tool/provider. |
