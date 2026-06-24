@@ -18,12 +18,7 @@ def _openai():
         if settings.openai_api_key:
             from openai import AsyncOpenAI
             _client = AsyncOpenAI(api_key=settings.openai_api_key)
-        elif settings.deepseek_api_key:
-            from openai import AsyncOpenAI
-            _client = AsyncOpenAI(
-                api_key=settings.deepseek_api_key,
-                base_url=settings.deepseek_base_url
-            )
+        # DeepSeek does not support /v1/embeddings — skip it for embedding client
     return _client
 
 

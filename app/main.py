@@ -131,6 +131,15 @@ async def _run_migrations():
             "CREATE INDEX IF NOT EXISTS idx_summaries_agent_time ON summaries(agent_id, created_at DESC)"
         ))
 
+        # Backfill missing column defaults for tables created before defaults were added
+        for alter_default_sql in [
+            "ALTER TABLE summaries ALTER COLUMN id SET DEFAULT gen_random_uuid()",
+        ]:
+            try:
+                await conn.execute(text(alter_default_sql))
+            except Exception:
+                pass
+
         for index_sql in [
             "CREATE INDEX IF NOT EXISTS idx_memories_embedding_hnsw ON memories USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)",
             "CREATE INDEX IF NOT EXISTS idx_memories_type_priority ON memories(memory_type, importance DESC, created_at DESC)",
