@@ -75,6 +75,7 @@ services:
       - .:/app:ro
     environment:
       NEXUS_SECRET: ${NEXUS_SECRET}
+      DATABASE_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD:-nexuspassword}@postgres:5432/nexus
       REDIS_URL: redis://redis:6379/0
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
