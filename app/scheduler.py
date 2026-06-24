@@ -17,6 +17,15 @@ log = logging.getLogger("nexus.scheduler")
 
 _SCHEDULER_KEY = "nexus:scheduler:last_run"
 _REPORT_KEY = "nexus:scheduler:last_report"
+_redis_client = None
+
+
+async def _get_shared_redis():
+    """Return a shared Redis client (lazy init, single instance)."""
+    global _redis_client
+    if _redis_client is None:
+        _redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    return _redis_client
 
 
 async def generate_consolidation_report(db: AsyncSession) -> dict:
@@ -96,9 +105,8 @@ async def run_daily_consolidation():
         
         # Store report in Redis for dashboard access
         try:
-            redis_client = aioredis.from_url(settings.redis_url)
-            await redis_client.setex(_REPORT_KEY, 86400, str(report))  # Keep for 24 hours
-            await redis_client.aclose()
+            r = await _get_shared_redis()
+            await r.setex(_REPORT_KEY, 86400, str(report))  # Keep for 24 hours
         except Exception as e:
             log.warning("Failed to store report in Redis: %s", e)
         
@@ -112,16 +120,15 @@ async def run_daily_consolidation():
 async def should_run_daily() -> bool:
     """Check if daily consolidation should run (based on last run time)."""
     try:
-        redis_client = aioredis.from_url(settings.redis_url)
-        last_run = await redis_client.get(_SCHEDULER_KEY)
-        await redis_client.aclose()
+        r = await _get_shared_redis()
+        last_run = await r.get(_SCHEDULER_KEY)
         
         if not last_run:
             return True
         
         # Check if last run was more than 20 hours ago
         from datetime import timedelta
-        last_run_time = datetime.fromisoformat(last_run.decode())
+        last_run_time = datetime.fromisoformat(last_run)
         return datetime.now(timezone.utc) - last_run_time > timedelta(hours=20)
     except Exception as e:
         log.warning("Failed to check last run time: %s", e)
@@ -131,9 +138,8 @@ async def should_run_daily() -> bool:
 async def mark_daily_run():
     """Mark that daily consolidation has been run."""
     try:
-        redis_client = aioredis.from_url(settings.redis_url)
-        await redis_client.setex(_SCHEDULER_KEY, 86400, datetime.now(timezone.utc).isoformat())
-        await redis_client.aclose()
+        r = await _get_shared_redis()
+        await r.setex(_SCHEDULER_KEY, 86400, datetime.now(timezone.utc).isoformat())
     except Exception as e:
         log.warning("Failed to mark daily run: %s", e)
 
@@ -141,13 +147,12 @@ async def mark_daily_run():
 async def get_latest_report() -> Optional[dict]:
     """Get the most recent consolidation report from Redis."""
     try:
-        redis_client = aioredis.from_url(settings.redis_url)
-        report_data = await redis_client.get(_REPORT_KEY)
-        await redis_client.aclose()
+        r = await _get_shared_redis()
+        report_data = await r.get(_REPORT_KEY)
         
         if report_data:
             import json
-            return json.loads(report_data.decode())
+            return json.loads(report_data)
         return None
     except Exception as e:
         log.warning("Failed to get latest report: %s", e)

@@ -168,7 +168,7 @@ Agent → MCP Tool Call → FastAPI Gateway → Search Engine → pgvector/Postg
 | `POST` | `/v1/memory/save` | Save a memory |
 | `POST` | `/v1/memory/recall` | 4-mode fused search |
 | `POST` | `/v1/memory/reflect` | LLM reflection over memories |
-| `POST` | `/v1/memory/synthesize` | Deep topic synthesis |
+| `POST` | `/v1/memory/synthesize` | Deep topic synthesis (via reflect) |
 | `GET` | `/v1/agents/{id}/context` | Agent context pack |
 | `POST` | `/v1/agents/{id}/learn` | Teach an agent |
 | `GET` | `/v1/synapse/projects` | List Synapse-compat projects |
@@ -184,6 +184,8 @@ memory_note_to_agent         memory_confirm                memory_contradict
 memory_profile               memory_forget_by_query        memory_extract_session
 agent_context                agent_learn                   agent_represent
 nexus_status                 
+session_start                session_append                session_end
+session_get                  session_list
 sys_core_01 — sys_core_31   (project context, code analysis, git diff, skills, task state)
 register_project             remember                      recall
 ingest_file                  search_files                  project_context
@@ -236,8 +238,7 @@ docker compose up -d
 
 Services:
 - `nexus-api` — FastAPI application (port 7777)
-- `nexus-worker` — Async embedding & consolidation worker
-- `nexus-bridge` — Host filesystem proxy for code analysis
+- `nexus-worker` — Async embedding, extraction & consolidation worker
 - `postgres` — PostgreSQL 17 + pgvector (port 5435)
 - `redis` — Redis 8 (port 6381)
 

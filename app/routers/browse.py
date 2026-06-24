@@ -165,22 +165,6 @@ async def list_agents(db: AsyncSession = Depends(get_db)):
         return AgentsListResponse(agents=[])
 
 
-@router.delete("/memories/{memory_id}")
-async def delete_memory(
-    memory_id: str,
-    db: AsyncSession = Depends(get_db),
-):
-    """Delete a memory by ID. Auth handled by router-level dependency."""
-    result = await db.execute(
-        text("DELETE FROM memories WHERE id = CAST(:id AS uuid) RETURNING id"),
-        {"id": memory_id},
-    )
-    if not result.fetchone():
-        raise HTTPException(status_code=404, detail="Memory not found")
-    await db.commit()
-    return {"deleted": memory_id}
-
-
 @router.post("/agents/{agent_name}/represent")
 async def rebuild_representation(agent_name: str):
     """Trigger an LLM representation rebuild for an agent."""

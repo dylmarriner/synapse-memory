@@ -62,70 +62,41 @@ services:
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
-      LEARNING_INTERVAL: ${LEARNING_INTERVAL:-300}
-      NEXUS_BRIDGE_URL: http://nexus-bridge:7778
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      nexus-bridge:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:7777/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 20s
-    restart: unless-stopped
-
-  nexus-bridge:
-    image: node:22-alpine
-    command: node /app/scripts/sys-bridge.mjs
-    volumes:
-      - .:/app:ro
-      - ${BSYNC_CORE_DIR:-${HOME}/.bsync_core}:/root/.nexus_core:ro
-      - ${WINDSURF_EXT_DIR:-${HOME}/.windsurf/extensions}:/root/.windsurf/extensions:ro
-    environment:
-      BRIDGE_PORT: "7778"
-      NEXUS_CORE_DIR: /root/.nexus_core
-      NEXUS_EXT_JS: ${NEXUS_EXT_JS:-}
-    ports:
-      - "127.0.0.1:7778:7778"
-    healthcheck:
-      test: ["CMD", "node", "-e", "http.get('http://localhost:7778/health',r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>process.exit(d.includes('ok')?0:1))}).on('error',()=>process.exit(1))"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 10s
     restart: unless-stopped
 
   nexus-worker:
     build: .
     volumes:
       - .:/app:ro
-    command: python -m app.worker
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/nexus-worker-heartbeat && test -n \"$(find /tmp/nexus-worker-heartbeat -mmin -1 2>/dev/null)\""]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 20s
     environment:
-      DATABASE_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD:-nexuspassword}@postgres:5432/nexus
+      NEXUS_SECRET: ${NEXUS_SECRET}
       REDIS_URL: redis://redis:6379/0
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
       EMBEDDING_DIMS: ${EMBEDDING_DIMS:-384}
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
-      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
+      LLM_COST_SAVER: ${LLM_COST_SAVER:-true}
+      LLM_INPUT_CHAR_LIMIT: ${LLM_INPUT_CHAR_LIMIT:-1200}
+      LLM_EXTRACT_MAX_TOKENS: ${LLM_EXTRACT_MAX_TOKENS:-180}
+      LLM_SUMMARY_MAX_TOKENS: ${LLM_SUMMARY_MAX_TOKENS:-220}
+      LLM_REFLECT_MAX_TOKENS: ${LLM_REFLECT_MAX_TOKENS:-300}
+      CONFIDENCE_DECAY_RATE: ${CONFIDENCE_DECAY_RATE:-0.95}
+      CONFIDENCE_DECAY_INTERVAL_DAYS: ${CONFIDENCE_DECAY_INTERVAL_DAYS:-7}
+      CONFIDENCE_FLOOR: ${CONFIDENCE_FLOOR:-0.1}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    command: ["python", "/app/app/worker.py"]
     restart: unless-stopped
 
 volumes:

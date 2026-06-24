@@ -257,7 +257,7 @@ def candidate_targets() -> list[dict[str, Any]]:
         {"id": "goose", "kind": "envfile", "path": HOME / ".goose" / "nexus.env", "agent": "goose"},
         {"id": "openhands", "kind": "envfile", "path": HOME / ".openhands" / "nexus.env", "agent": "openhands"},
         {"id": "swe-agent", "kind": "envfile", "path": HOME / ".swe-agent" / "nexus.env", "agent": "swe-agent"},
-        {"id": "hermes", "kind": "envfile", "path": HOME / ".hermes" / "nexus.env", "agent": "hermes"},
+        {"id": "hermes", "kind": "hermes", "path": HOME / ".hermes" / "cli-config.yaml", "agent": "hermes"},
         {"id": "openclaw", "kind": "envfile", "path": HOME / ".openclaw" / "nexus.env", "agent": "openclaw"},
         {"id": "devin-cli", "kind": "instructions", "path": HOME / ".devin" / "NEXUS.md", "agent": "devin-cli"},
     ]
@@ -299,6 +299,64 @@ def connect_target(target: dict[str, Any], url: str, secret: str, apply: bool) -
             }
             action = write_json(path, config, apply)
             return Finding(target["id"], path, status, "wrote Paperclip Nexus config", action)
+
+        if kind == "hermes":
+            # 1. Inject MCP server into ~/.hermes/cli-config.yaml
+            import re as _re
+            hermes_dir = path.parent
+            cfg_text = path.read_text(encoding="utf-8") if path.exists() else ""
+            mcp_block = (
+                f"\nmcp_servers:\n"
+                f"  nexus:\n"
+                f"    url: {url.rstrip('/')}/mcp\n"
+                f"    headers:\n"
+                f"      Authorization: \"Bearer {secret}\"\n"
+            )
+            if "mcp_servers:" not in cfg_text:
+                new_cfg = cfg_text + mcp_block
+            else:
+                # Replace existing nexus block if present
+                new_cfg = _re.sub(
+                    r"(mcp_servers:.*?)(  nexus:.*?)(?=  \w|\Z)",
+                    r"\1" + mcp_block.lstrip("\n").replace("mcp_servers:\n", ""),
+                    cfg_text, flags=_re.DOTALL,
+                ) if "  nexus:" in cfg_text else cfg_text + mcp_block
+            # 2. Write USER.md for passive context injection
+            user_md = hermes_dir / "USER.md"
+            user_md_marker = "<!-- NEXUS_CONTEXT_START -->"
+            user_md_text = user_md.read_text(encoding="utf-8") if user_md.exists() else ""
+            if user_md_marker not in user_md_text:
+                new_user_md = user_md_text + f"\n{user_md_marker}\n*Nexus active memory will be injected here automatically.*\n<!-- NEXUS_CONTEXT_END -->\n"
+            else:
+                new_user_md = user_md_text  # push daemon updates this
+            # 3. Write session-end hook
+            hooks_dir = hermes_dir / "agent-hooks"
+            hook_path = hooks_dir / "nexus-session-end.sh"
+            _nu = url.rstrip("/")
+            hook_script = "\n".join([
+                "#!/bin/bash",
+                "# Auto-archive Hermes session to Nexus",
+                f"NEXUS_URL={_nu}",
+                f"NEXUS_SECRET={secret}",
+                'SUMMARY="${1:-Hermes session ended}"',
+                'curl -sf -X POST "$NEXUS_URL/v1/hooks/trigger"'
+                ' -H "Authorization: Bearer $NEXUS_SECRET"'
+                ' -H "Content-Type: application/json"'
+                ' -d \'{"agent_id":"hermes","event":"session_ended"}\' > /dev/null',
+                "",
+            ])
+            if apply:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                b = backup(path)
+                path.write_text(new_cfg, encoding="utf-8")
+                user_md.write_text(new_user_md, encoding="utf-8")
+                hooks_dir.mkdir(parents=True, exist_ok=True)
+                hook_path.write_text(hook_script, encoding="utf-8")
+                hook_path.chmod(0o755)
+                action = "written" + (f"; backup={b}" if b else "")
+            else:
+                action = "dry-run"
+            return Finding(target["id"], path, status, "configured Hermes MCP + USER.md + session hook", action)
 
         if kind == "envfile":
             content = (

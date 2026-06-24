@@ -41,7 +41,8 @@ def _default_registrations() -> dict[str, list[dict]]:
             {"type": "file_inject", "path": f"{home}/.claude/CLAUDE.md", "mode": "markdown_block"},
         ],
         "hermes": [
-            {"type": "file_inject", "path": f"{home}/.config/hermes/nexus-context.md", "mode": "append_section"},
+            # Hermes auto-injects ~/.hermes/USER.md into every system prompt
+            {"type": "file_inject", "path": f"{home}/.hermes/USER.md", "mode": "markdown_block"},
         ],
         "gemini-cli": [
             {"type": "file_inject", "path": f"{home}/.gemini/nexus-context.md", "mode": "markdown_block"},

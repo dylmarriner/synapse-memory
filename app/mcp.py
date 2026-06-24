@@ -738,17 +738,16 @@ async def _dispatch(tool: str, args: dict, request: Request) -> str:
 
         elif tool == "memory_synthesize":
             topic = args.get("topic", "")
-            params: dict = {"topic": topic, "limit": args.get("limit", 30)}
-            if args.get("agent_id"):
-                params["agent_id"] = args["agent_id"]
             r = await client.post(f"{base}/v1/memory/reflect", json={
                 "query": topic,
                 "agent_id": args.get("agent_id"),
                 "depth": "high",
-                "context": "Please synthesize all knowledge on this topic comprehensively.",
+                "context": "Please synthesize all knowledge on this topic comprehensively, generating a structured knowledge document with key facts, relationships, patterns, and any gaps or contradictions.",
             }, headers=headers)
             r.raise_for_status()
-            return r.json()["reflection"]
+            d = r.json()
+            reflection = d.get("reflection", "")
+            return f"Knowledge synthesis on '{topic}':\n\n{reflection}"
 
         # ── sys_core_* tools (sys_core-compatible) ───────────────────────────
 
