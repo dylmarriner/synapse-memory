@@ -98,6 +98,12 @@ services:
       redis:
         condition: service_healthy
     command: ["python", "/app/app/worker.py"]
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/nexus-worker-heartbeat && test -n \"$(find /tmp/nexus-worker-heartbeat -mmin -1 2>/dev/null)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     restart: unless-stopped
 
 volumes:
