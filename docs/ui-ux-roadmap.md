@@ -413,7 +413,8 @@ Implemented: `/v1/memory/recall/debug` returns vector, lexical, graph,
 temporal, fused, and reranked results with explanation metadata. The zero-build
 dashboard includes a Recall Lab tab for side-by-side mode comparison. Recall Lab
 result cards include Useful/Not useful feedback controls that call confirm and
-contradict memory trust endpoints.
+contradict memory trust endpoints. Optional polish added: score bars,
+matched-by/trust badges, full JSON report copy, and agent-vs-agent comparison.
 
 ### UI Phase 4 — Sessions and provenance
 
