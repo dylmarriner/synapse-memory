@@ -52,7 +52,7 @@ async def get_graph(
     node_ids = {str(r.id) for r in node_rows}
 
     if not node_ids:
-        return {"nodes": [], "edges": [], "agent_id": agent_id}
+        return {"nodes": [], "edges": [], "agent_id": agent_id, "node_count": 0, "edge_count": 0}
 
     # Only return edges where both endpoints are in our node set
     edge_rows = (await db.execute(text(f"""

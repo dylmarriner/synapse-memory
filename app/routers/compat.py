@@ -7,9 +7,8 @@ from app.agents.context import get_context
 from app.agents.peer import get_or_create
 from app.db import get_db
 from app.memory.ingest import save_memory
-from app.memory.reflect import reflect as do_reflect
 from app.models.api import MemoryRecallRequest, MemoryReflectRequest, MemorySaveRequest
-from app.routers.memory import recall as nexus_recall
+from app.routers.memory import recall as nexus_recall, reflect_endpoint as nexus_reflect
 
 router = APIRouter()
 
@@ -33,19 +32,22 @@ async def hindsight_retain(body: dict, request: Request, db: AsyncSession = Depe
 @router.post("/recall")
 async def hindsight_recall(body: dict):
     """Hindsight-style recall alias for Nexus four-way recall."""
-    req = MemoryRecallRequest(
+    kw = dict(
         query=body.get("query") or body.get("text") or "",
         agent_id=body.get("agent_id") or body.get("peer_id") or body.get("workspace_id"),
         limit=int(body.get("limit", 10)),
-        memory_types=body.get("memory_types") or body.get("types"),
-        search_modes=body.get("search_modes") or body.get("modes"),
     )
+    if body.get("memory_types") or body.get("types"):
+        kw["memory_types"] = body.get("memory_types") or body.get("types")
+    if body.get("search_modes") or body.get("modes"):
+        kw["search_modes"] = body.get("search_modes") or body.get("modes")
+    req = MemoryRecallRequest(**kw)
     result = await nexus_recall(req)
     return result.model_dump(mode="json")
 
 
 @router.post("/reflect")
-async def hindsight_reflect(body: dict, db: AsyncSession = Depends(get_db)):
+async def hindsight_reflect(body: dict):
     """Hindsight-style reflect alias for Nexus synthesis."""
     req = MemoryReflectRequest(
         query=body.get("query") or body.get("text") or "",
@@ -53,7 +55,7 @@ async def hindsight_reflect(body: dict, db: AsyncSession = Depends(get_db)):
         context=body.get("context"),
         depth=body.get("depth", "mid"),
     )
-    result = await do_reflect(db, req)
+    result = await nexus_reflect(req)
     return result.model_dump(mode="json")
 
 

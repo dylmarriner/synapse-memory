@@ -35,14 +35,15 @@ def _estimate_tokens(content: str) -> int:
 @router.post("/start", response_model=SessionStartResponse)
 async def start_session(body: SessionStartRequest, db: AsyncSession = Depends(get_db)):
     agent = await get_or_create(db, body.agent_id)
+    agent_uuid = agent["id"] if isinstance(agent, dict) else str(agent.id)
     sid = uuid.uuid4()
     result = await db.execute(text("""
-        INSERT INTO sessions (id, agent_id, agent_name, project_key, title, metadata)
-        VALUES (:id, :agent_id, :agent_name, :project_key, :title, CAST(:metadata AS jsonb))
+        INSERT INTO sessions (id, agent_id, agent_name, started_at, project_key, title, metadata)
+        VALUES (:id, CAST(:agent_id AS uuid), :agent_name, NOW(), :project_key, :title, CAST(:metadata AS jsonb))
         RETURNING started_at
     """), {
         "id": sid,
-        "agent_id": agent.id,
+        "agent_id": agent_uuid,
         "agent_name": body.agent_id,
         "project_key": body.project_key,
         "title": body.title,
@@ -51,8 +52,8 @@ async def start_session(body: SessionStartRequest, db: AsyncSession = Depends(ge
     started_at = result.scalar()
     await db.execute(text("""
         UPDATE agents SET session_count = session_count + 1, last_active = NOW()
-        WHERE id = :agent_id
-    """), {"agent_id": agent.id})
+        WHERE id = CAST(:agent_id AS uuid)
+    """), {"agent_id": agent_uuid})
     await db.commit()
     return SessionStartResponse(session_id=str(sid), agent_id=body.agent_id, started_at=started_at)
 
@@ -69,8 +70,8 @@ async def append_message(
     mid = uuid.uuid4()
     token_estimate = body.token_estimate if body.token_estimate is not None else _estimate_tokens(body.content)
     await db.execute(text("""
-        INSERT INTO messages (id, session_id, role, content, token_estimate, metadata)
-        VALUES (:id, CAST(:session_id AS uuid), :role, :content, :token_estimate, CAST(:metadata AS jsonb))
+        INSERT INTO messages (id, session_id, role, content, token_estimate, created_at, metadata)
+        VALUES (:id, CAST(:session_id AS uuid), :role, :content, :token_estimate, NOW(), CAST(:metadata AS jsonb))
     """), {
         "id": mid,
         "session_id": session_id,

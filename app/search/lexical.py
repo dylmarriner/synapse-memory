@@ -19,7 +19,11 @@ async def lexical_search(
     limit: int = 20,
 ) -> List[MemoryResult]:
     """PostgreSQL tsvector full-text search."""
-    conditions = ["to_tsvector('english', content) @@ plainto_tsquery('english', :query)"]
+    conditions = [
+        "to_tsvector('english', content) @@ plainto_tsquery('english', :query)",
+        "superseded_by IS NULL",
+        "(valid_until IS NULL OR valid_until > NOW())",
+    ]
     params: dict = {"query": query, "limit": limit}
 
     if agent_id:

@@ -20,7 +20,10 @@ async def temporal_search(
 ) -> List[MemoryResult]:
     """Recency + importance weighted recall."""
     tokens = [t.lower().strip(".,!?;:'\"") for t in query.split() if len(t) > 3]
-    conditions = []
+    conditions = [
+        "superseded_by IS NULL",
+        "(valid_until IS NULL OR valid_until > NOW())",
+    ]
     params: dict = {"limit": limit}
 
     if tokens:
@@ -38,13 +41,13 @@ async def temporal_search(
         conditions.append("memory_type = ANY(:types)")
         params["types"] = memory_types
 
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    where = "WHERE " + " AND ".join(conditions)
 
     sql = text(f"""
         SELECT id, content, memory_type, agent_id, importance, access_count, created_at, metadata,
                confidence, valid_from, valid_until, extraction_model,
                (importance * 0.5 +
-                LEAST(1.0, EXTRACT(EPOCH FROM (NOW() - created_at)) / -86400.0 + 1.0) * 0.3 +
+                GREATEST(0.0, 1.0 - EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0) * 0.3 +
                 LEAST(1.0, access_count / 10.0) * 0.2) AS score
         FROM memories
         {where}

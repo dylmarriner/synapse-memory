@@ -25,7 +25,7 @@ async def vector_search(
     if embedding is None:
         return []
 
-    conditions = ["embedding IS NOT NULL"]
+    conditions = ["embedding IS NOT NULL", "superseded_by IS NULL", "(valid_until IS NULL OR valid_until > NOW())"]
     params: dict = {"emb": str(embedding), "limit": limit}
 
     if agent_id:
