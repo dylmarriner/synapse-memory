@@ -124,6 +124,13 @@ async def end_session(
         """), {"memory_id": memory_id, "source_id": session_id, "metadata": json.dumps({"summary": True})})
         await db.commit()
 
+    # Trigger active memory push on session end — agent context may have changed
+    try:
+        from app.push.daemon import publish_push_event
+        await publish_push_event(request.app.state.redis, row.agent_name, "session_ended")
+    except Exception:
+        pass
+
     return SessionEndResponse(session_id=session_id, ended=True, memory_id=memory_id)
 
 

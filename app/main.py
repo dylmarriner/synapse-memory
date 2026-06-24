@@ -57,6 +57,7 @@ from app.routers.sys_bridge import router as sys_bridge_router
 from app.routers.synapse import router as synapse_router
 from app.routers.compat import router as compat_router
 from app.routers.graph import router as graph_router
+from app.routers.hooks import router as hooks_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -316,11 +317,19 @@ async def lifespan(app: FastAPI):
     scheduler_task = asyncio.create_task(scheduler_loop())
     log.info("Scheduler started for daily consolidation reports")
 
+    # Start active memory push daemon
+    from app.push.daemon import PushDaemon
+    push_daemon = PushDaemon(redis_client)
+    push_task = asyncio.create_task(push_daemon.start())
+    log.info("Active memory push daemon started")
+
     log.info("Nexus ready — REST: /v1  MCP: /mcp  Dashboard: /")
     yield
 
     task.cancel()
     scheduler_task.cancel()
+    push_daemon.stop()
+    push_task.cancel()
     await redis_client.aclose()
     await engine.dispose()
     log.info("Nexus stopped")
@@ -372,8 +381,9 @@ app.include_router(sessions_router, prefix="/v1/sessions", tags=["sessions"], de
 app.include_router(mcp_router,        prefix="/mcp",           tags=["mcp"],        dependencies=[Depends(_verify_key)])
 app.include_router(sys_bridge_router,  prefix="/v1/sys",  tags=["sys"],  dependencies=[Depends(_verify_key)])
 app.include_router(synapse_router, prefix="/v1/synapse", tags=["synapse"], dependencies=[Depends(_verify_key)])
-app.include_router(compat_router, prefix="/v1", tags=["compat"], dependencies=[Depends(_verify_key)])
-app.include_router(graph_router,  prefix="/v1",         tags=["graph"],   dependencies=[Depends(_verify_key)])
+app.include_router(compat_router, prefix="/v1",        tags=["compat"],  dependencies=[Depends(_verify_key)])
+app.include_router(graph_router,  prefix="/v1",        tags=["graph"],   dependencies=[Depends(_verify_key)])
+app.include_router(hooks_router,  prefix="/v1/hooks",  tags=["hooks"],   dependencies=[Depends(_verify_key)])
 
 
 @app.get("/.well-known/nexus/openapi.json", include_in_schema=False)

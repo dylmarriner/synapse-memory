@@ -111,6 +111,15 @@ async def save_memory(
     except Exception:
         pass
 
+    # Trigger active memory push for high-importance memories
+    if redis_client and importance >= 0.7:
+        try:
+            from app.push.daemon import publish_push_event
+            event = "preference_saved" if memory.memory_type in ("preference", "lesson") else "memory_saved"
+            await publish_push_event(redis_client, req.agent_id, event)
+        except Exception as e:
+            log.debug("Push event publish failed (non-fatal): %s", e)
+
     return MemorySaveResponse(
         id=str(memory.id),
         classified_type=memory.memory_type,
