@@ -20,7 +20,13 @@ async def get_context(
     token_budget: int = 2000,
     search_query: Optional[str] = None,
 ) -> AgentContextResponse:
-    """Assemble token-budgeted context for an agent, with rolling summary at the top."""
+    """Assemble token-budgeted context for an agent.
+
+    Without search_query: returns only summary + conclusions (no memory dump).
+    With search_query: runs the recall pipeline to surface relevant memories.
+    This keeps session-start context small and only pulls relevant memories
+    when there's something specific to search for.
+    """
     budget = token_budget * _CHARS_PER_TOKEN
 
     agent_row = await db.execute(
@@ -35,7 +41,7 @@ async def get_context(
     representation = row.representation or ""
     budget -= len(representation)
 
-    # Load latest rolling summary (most useful for session start)
+    # Load latest rolling summary
     summary = None
     try:
         s_row = await db.execute(text("""
@@ -72,7 +78,7 @@ async def get_context(
     unread_note_ids = []
     for note in note_rows.fetchall():
         source = note.source_agent or (note.metadata or {}).get("source_agent") or "unknown"
-        msg = f"📬 Unread message from {source}: {note.content}"
+        msg = f"[note from {source}] {note.content}"
         conclusions.append(msg)
         unread_note_ids.append(str(note.id))
         budget -= len(msg)
@@ -84,9 +90,74 @@ async def get_context(
         """), {"ids": unread_note_ids})
         await db.commit()
 
-    # Memories — prioritize lessons and high-importance
+    e_row = await db.execute(
+        text("SELECT COUNT(*) AS cnt FROM entities WHERE agent_id = CAST(:id AS uuid)"),
+        {"id": str(agent_id)},
+    )
+    entity_count = e_row.scalar() or 0
+
+    # On-demand summary rebuild (lazy — only when context is requested and no summary exists)
+    if not summary:
+        try:
+            from app.memory.extract import _build_summary, _get_llm
+            llm = _get_llm()
+            if llm:
+                summary = await _build_summary(agent_name, str(agent_id), db, llm)
+                if summary:
+                    budget -= len(summary)
+        except Exception:
+            pass
+
+    # Memories — only load if a search query is provided; otherwise skip the dump.
+    # Callers that want top-N memories without a query can pass search_query="*".
     memories: List[MemoryResult] = []
-    if budget > 0:
+    if search_query and search_query.strip() and search_query.strip() != "*" and budget > 0:
+        # Use the recall pipeline so results are actually relevant to the query.
+        try:
+            from app.search.vector import vector_search
+            from app.search.lexical import lexical_search
+            from app.search.fusion import reciprocal_rank_fusion
+            import asyncio
+            from app.db import SessionLocal
+
+            async def _search(fn, *args):
+                async with SessionLocal() as s:
+                    return await fn(s, *args)
+
+            mem_limit = max(1, settings.context_memory_limit)
+            raw = await asyncio.gather(
+                _search(vector_search, search_query, agent_name, None, mem_limit * 2),
+                _search(lexical_search, search_query, agent_name, None, mem_limit * 2),
+                return_exceptions=True,
+            )
+            lists = [r for r in raw if not isinstance(r, Exception) and r]
+            fused = reciprocal_rank_fusion(lists)[:mem_limit]
+
+            char_limit = max(80, settings.context_memory_char_limit)
+            for r in fused:
+                if budget <= 0:
+                    break
+                content = r.content
+                if len(content) > char_limit:
+                    content = content[:char_limit].rstrip() + "…"
+                memories.append(MemoryResult(
+                    id=r.id,
+                    content=content,
+                    score=r.score,
+                    memory_type=r.memory_type,
+                    agent_id=agent_name,
+                    agent_name=agent_name,
+                    importance=r.importance,
+                    access_count=r.access_count,
+                    created_at=r.created_at,
+                    metadata=r.metadata or {},
+                ))
+                budget -= len(content)
+        except Exception as e:
+            log.warning("Contextual recall in get_context failed: %s", e)
+
+    elif search_query == "*" and budget > 0:
+        # Explicit wildcard: load top memories by importance (legacy behaviour, opt-in only).
         m_rows = await db.execute(
             text("""
                 SELECT id, content, memory_type, importance, access_count, created_at, metadata
@@ -108,11 +179,11 @@ async def get_context(
             """),
             {"id": str(agent_id), "limit": max(1, settings.context_memory_limit)},
         )
+        char_limit = max(80, settings.context_memory_char_limit)
         for r in m_rows.fetchall():
             if budget <= 0:
                 break
             content = r.content
-            char_limit = max(80, settings.context_memory_char_limit)
             if len(content) > char_limit:
                 content = content[:char_limit].rstrip() + "…"
             memories.append(MemoryResult(
@@ -128,25 +199,6 @@ async def get_context(
                 metadata=r.metadata or {},
             ))
             budget -= len(content)
-
-    e_row = await db.execute(
-        text("SELECT COUNT(*) AS cnt FROM entities WHERE agent_id = CAST(:id AS uuid)"),
-        {"id": str(agent_id)},
-    )
-    entity_count = e_row.scalar() or 0
-
-    # On-demand summary rebuild (lazy — only when context is requested)
-    if agent_row and len(memories) >= 5 and not summary:
-        # Try to build a fresh summary
-        try:
-            from app.memory.extract import _build_summary, _get_llm
-            llm = _get_llm()
-            if llm:
-                summary = await _build_summary(agent_name, str(agent_id), db, llm)
-                if summary:
-                    budget -= len(summary)
-        except Exception:
-            pass
 
     return AgentContextResponse(
         agent_id=agent_name,

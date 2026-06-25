@@ -29,7 +29,10 @@ async def vector_search(
     params: dict = {"emb": str(embedding), "limit": limit}
 
     if agent_id:
-        conditions.append("agent_id = (SELECT id FROM agents WHERE name = :agent_name LIMIT 1)")
+        # Include both the agent's own memories and any global shared memories.
+        conditions.append("""agent_id IN (
+            SELECT id FROM agents WHERE name = :agent_name OR name = 'global' LIMIT 2
+        )""")
         params["agent_name"] = agent_id
 
     if memory_types:

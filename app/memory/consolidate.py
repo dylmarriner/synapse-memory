@@ -11,7 +11,7 @@ from app.config import settings
 
 log = logging.getLogger("nexus.memory.consolidate")
 
-SIMILARITY_THRESHOLD = 0.92
+SIMILARITY_THRESHOLD = 0.82
 
 
 async def consolidate(db: AsyncSession) -> Dict[str, int]:
@@ -112,7 +112,7 @@ async def consolidate(db: AsyncSession) -> Dict[str, int]:
               AND a.memory_type != 'lesson'
               AND b.memory_type != 'lesson'
             ORDER BY similarity DESC
-            LIMIT 50
+            LIMIT 500
         """))
         pairs = dup_rows.fetchall()
 

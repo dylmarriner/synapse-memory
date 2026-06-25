@@ -167,7 +167,7 @@ async def _find_semantic_duplicate(
     agent_id,
     embedding: Optional[List[float]],
     content: str,
-    threshold: float = 0.92,
+    threshold: float = 0.82,
 ):
     """Return a near-duplicate memory row for this agent/content, if one exists."""
     if embedding:

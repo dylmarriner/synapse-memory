@@ -26,9 +26,9 @@ class Settings(BaseSettings):
     llm_synthesis_max_tokens: int = 450
     llm_query_expansion: bool = False
     llm_query_expansion_min_chars: int = 80
-    context_memory_limit: int = 20
-    context_memory_char_limit: int = 500
-    context_conclusion_limit: int = 8
+    context_memory_limit: int = 10
+    context_memory_char_limit: int = 200
+    context_conclusion_limit: int = 5
 
     cors_origins: str = ""
 
