@@ -116,6 +116,7 @@ async def consolidate(db: AsyncSession) -> Dict[str, int]:
         """))
         pairs = dup_rows.fetchall()
 
+        merge_pairs = []  # (keep_id, drop_id)
         to_drop = set()
         for row in pairs:
             keep = str(row.keep_id)
@@ -123,9 +124,21 @@ async def consolidate(db: AsyncSession) -> Dict[str, int]:
             # Don't drop something we're keeping, avoid cascade conflicts
             if drop not in to_drop and keep not in to_drop:
                 to_drop.add(drop)
+                merge_pairs.append((keep, drop))
 
-        if to_drop:
-            for drop_id in to_drop:
+        if merge_pairs:
+            for keep_id, drop_id in merge_pairs:
+                # Merge the loser's reinforcement history into the survivor so a
+                # belief accumulates trust instead of losing it on every collapse.
+                await db.execute(text("""
+                    UPDATE memories keep
+                    SET access_count = keep.access_count + drop.access_count,
+                        confirmed_count = keep.confirmed_count + drop.confirmed_count + 1,
+                        importance = LEAST(1.0, GREATEST(keep.importance, drop.importance)),
+                        metadata = COALESCE(keep.metadata, '{}'::jsonb) || COALESCE(drop.metadata, '{}'::jsonb)
+                    FROM memories drop
+                    WHERE keep.id = CAST(:keep AS uuid) AND drop.id = CAST(:drop AS uuid)
+                """), {"keep": keep_id, "drop": drop_id})
                 await db.execute(
                     text("DELETE FROM memories WHERE id = CAST(:id AS uuid)"),
                     {"id": drop_id},
@@ -156,6 +169,28 @@ async def consolidate(db: AsyncSession) -> Dict[str, int]:
         await db.commit()
     except Exception as e:
         log.warning("Confidence decay pass failed: %s", e)
+
+    # Pass 7: TTL pruning — hard-delete genuinely dead memories (opt-in).
+    # Lessons, preferences, failures, and superseded-target rows are never pruned.
+    stats["pruned"] = 0
+    if settings.prune_enabled:
+        try:
+            r = await db.execute(text("""
+                DELETE FROM memories
+                WHERE importance < :floor
+                  AND accessed_at < NOW() - INTERVAL '1 day' * :days
+                  AND memory_type NOT IN ('lesson', 'preference')
+                  AND COALESCE(metadata->>'failure', 'false') != 'true'
+                  AND superseded_by IS NULL
+                  AND id NOT IN (SELECT superseded_by FROM memories WHERE superseded_by IS NOT NULL)
+                RETURNING id
+            """), {"floor": settings.prune_importance_floor, "days": settings.prune_stale_days})
+            stats["pruned"] = len(r.fetchall())
+            await db.commit()
+            if stats["pruned"]:
+                log.info("Pruned %d dead memories", stats["pruned"])
+        except Exception as e:
+            log.warning("Prune pass failed: %s", e)
 
     log.info("Consolidation: %s", stats)
     return stats

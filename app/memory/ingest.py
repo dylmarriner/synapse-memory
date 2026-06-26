@@ -4,7 +4,7 @@ import json
 import logging
 import socket
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 
 import redis.asyncio as aioredis
@@ -17,6 +17,41 @@ from app.models.api import MemorySaveRequest, MemorySaveResponse
 from app.embeddings import get_embedding
 
 log = logging.getLogger("nexus.memory.ingest")
+
+# Markers that a fact is time-bound — used to estimate a shelf life so ephemeral
+# notes ("currently on the auth branch") expire instead of resurfacing as current.
+_EPHEMERAL_MARKERS = (
+    "right now", "currently", "today", "at the moment", "this session",
+    "as of now", "for now", "temporarily", "currently on", "working on right now",
+)
+_SHORTTERM_MARKERS = (
+    "this week", "this sprint", "working on", "in progress", "for the next",
+    "until ", "this month", "planning to", "about to",
+)
+# Markers that something failed / is a dead end — failure memory is first-class.
+_FAILURE_MARKERS = (
+    "didn't work", "did not work", "failed", "doesn't work", "does not work",
+    "broke", "broken", "dead end", "tried but", "avoid", "don't use", "do not use",
+    "regression", "caused a bug", "made it worse",
+)
+
+
+def _estimate_valid_until(content: str) -> Optional[datetime]:
+    """Estimate when a fact stops being true, from volatility cues. None = permanent."""
+    if not settings.volatility_enabled:
+        return None
+    low = content.lower()
+    now = datetime.now(timezone.utc)
+    if any(m in low for m in _EPHEMERAL_MARKERS):
+        return now + timedelta(days=settings.volatility_ephemeral_days)
+    if any(m in low for m in _SHORTTERM_MARKERS):
+        return now + timedelta(days=settings.volatility_shortterm_days)
+    return None
+
+
+def _looks_like_failure(content: str) -> bool:
+    low = content.lower()
+    return any(m in low for m in _FAILURE_MARKERS)
 
 
 async def save_memory(
@@ -37,6 +72,23 @@ async def save_memory(
     importance = req.importance
     if req.memory_type == "lesson" and importance < 0.8:
         importance = 0.9
+
+    # Failure memory is first-class — tag it and keep it durable so we don't
+    # re-walk dead ends. Failures never get a volatility TTL.
+    is_failure = _looks_like_failure(req.content)
+    if is_failure:
+        tags = list(meta.get("tags", []))
+        if "failure" not in tags:
+            tags.append("failure")
+        meta["tags"] = tags
+        meta["failure"] = True
+        if importance < 0.7:
+            importance = 0.7
+
+    # Shelf life — let the caller win, else estimate from volatility cues.
+    valid_until = getattr(req, "valid_until", None)
+    if valid_until is None and not is_failure:
+        valid_until = _estimate_valid_until(req.content)
 
     embedding = await get_embedding(req.content)
 
@@ -74,7 +126,7 @@ async def save_memory(
         metadata_=meta,
         confidence=req.confidence if hasattr(req, "confidence") else 1.0,
         valid_from=req.valid_from if hasattr(req, "valid_from") else None,
-        valid_until=req.valid_until if hasattr(req, "valid_until") else None,
+        valid_until=valid_until,
         extraction_model=req.extraction_model if hasattr(req, "extraction_model") else None,
         extraction_version=req.extraction_version if hasattr(req, "extraction_version") else None,
     )

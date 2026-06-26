@@ -26,6 +26,7 @@ class MemoryRecallRequest(BaseModel):
     memory_types: List[str] = Field(default_factory=list)
     limit: int = Field(default=10, ge=1, le=100)
     search_modes: List[str] = Field(default_factory=lambda: ["vector", "lexical", "graph", "temporal"])
+    min_relevance: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class MemoryReflectRequest(BaseModel):
@@ -47,6 +48,7 @@ class MemoryResult(BaseModel):
     id: str
     content: str
     score: float = 0.0
+    relevance: float = 0.0  # raw semantic similarity (0-1, calibrated) — for honesty gating
     memory_type: str = "observation"
     agent_id: Optional[str] = None
     agent_name: Optional[str] = None

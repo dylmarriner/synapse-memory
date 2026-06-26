@@ -44,12 +44,16 @@ def reciprocal_rank_fusion(
     scores: Dict[str, float] = {}
     best: Dict[str, MemoryResult] = {}
     modes: Dict[str, List[str]] = {}
+    relevance: Dict[str, float] = {}
 
     for result_list in result_lists:
         for rank, result in enumerate(result_list):
             mem_id = result.id
             mode_w = max((weights.get(m, 1.0) for m in result.matched_by), default=1.0)
             scores[mem_id] = scores.get(mem_id, 0.0) + mode_w / (k + rank + 1)
+
+            # Track the best calibrated semantic relevance (cosine from vector mode).
+            relevance[mem_id] = max(relevance.get(mem_id, 0.0), result.relevance or 0.0)
 
             if mem_id not in best or result.score > best[mem_id].score:
                 best[mem_id] = result
@@ -67,6 +71,7 @@ def reciprocal_rank_fusion(
         multi = _multi_mode_bonus(len(modes[mem_id]))
         importance_boost = 1.0 + r.importance * 0.15
         r.score = round(rrf_score * trust * multi * importance_boost, 6)
+        r.relevance = round(relevance.get(mem_id, 0.0), 6)
         r.matched_by = modes[mem_id]
         fused.append(r)
 

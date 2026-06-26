@@ -127,6 +127,13 @@ async def recall(body: MemoryRecallRequest):
 
     fused = await rerank_results(body.query, fused, body.limit)
 
+    # Honesty gate: drop weak matches so recall returns recognition, not noise.
+    # When nothing clears the bar, return empty — "I don't have that" beats a guess.
+    from app.config import settings as _gate
+    min_rel = body.min_relevance if body.min_relevance > 0 else _gate.recall_min_relevance
+    if min_rel > 0:
+        fused = [m for m in fused if (m.relevance or 0.0) >= min_rel]
+
     if fused:
         task = asyncio.create_task(_bump_async([m.id for m in fused]))
         task.add_done_callback(lambda t: log.warning("bump_access failed: %s", t.exception()) if t.exception() else None)

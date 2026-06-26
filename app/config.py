@@ -44,6 +44,19 @@ class Settings(BaseSettings):
     confidence_decay_interval_days: int = 7
     confidence_floor: float = 0.1
 
+    # Recall honesty gate — server-side default min relevance (0 = off; callers can override).
+    recall_min_relevance: float = 0.0
+
+    # Volatility / shelf-life — auto-expire ephemeral facts so stale info never resurfaces.
+    volatility_enabled: bool = True
+    volatility_ephemeral_days: int = 3      # "currently", "today", "right now" → short TTL
+    volatility_shortterm_days: int = 30     # "this week", "working on" → medium TTL
+
+    # TTL pruning — hard-delete genuinely dead memories (opt-in; deletes data).
+    prune_enabled: bool = False
+    prune_importance_floor: float = 0.12
+    prune_stale_days: int = 60
+
     otel_enabled: bool = False
     otel_endpoint: str = "http://localhost:4318/v1/traces"
 

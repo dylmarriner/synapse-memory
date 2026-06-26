@@ -15,7 +15,13 @@ NEXUS_URL = os.getenv("NEXUS_URL", "http://localhost:7777")
 NEXUS_TOKEN = os.getenv("NEXUS_SECRET", "")
 AGENT_ID = os.getenv("NEXUS_AGENT_ID", "claude-code")
 
-REFLECTION_NOTE = "[PRE-RESPONSE: apex-agent + self-reflection active] Engage structured thinking before responding: consider accuracy, completeness, edge cases, and what you may not know."
+# Quiet by default. Only the recall block below is injected, and only when a
+# memory genuinely matches. No memory match → nothing injected (honest silence).
+REFLECTION_NOTE = ""
+
+# Only surface memories whose calibrated semantic relevance clears this bar.
+MIN_RELEVANCE = float(os.getenv("NEXUS_RECALL_MIN_RELEVANCE", "0.55"))
+MAX_RESULTS = int(os.getenv("NEXUS_RECALL_MAX_RESULTS", "3"))
 
 try:
     raw = sys.stdin.read()
@@ -30,12 +36,7 @@ try:
         user_prompt = ""
 
     if not user_prompt or len(user_prompt.strip()) < 8:
-        print(json.dumps({
-            "hookSpecificOutput": {
-                "hookEventName": "UserPromptSubmit",
-                "additionalContext": REFLECTION_NOTE,
-            }
-        }))
+        # Nothing worth recalling against — stay silent.
         sys.exit(0)
 
     append_session("user", user_prompt, {"hook": "UserPromptSubmit"})
@@ -43,8 +44,9 @@ try:
     payload = json.dumps({
         "query": user_prompt[:500],
         "agent_id": AGENT_ID,
-        "limit": 5,
+        "limit": MAX_RESULTS,
         "search_modes": ["vector", "lexical"],
+        "min_relevance": MIN_RELEVANCE,
     }).encode()
 
     req = urllib.request.Request(
@@ -57,17 +59,24 @@ try:
     )
     resp = urllib.request.urlopen(req, timeout=4)
     data = json.loads(resp.read())
-    results = data.get("results", [])
+    results = data.get("results", [])[:MAX_RESULTS]
 
-    lines = [REFLECTION_NOTE]
-    if results:
-        lines.append("")
-        lines.append("[NEXUS AUTO-RECALL — relevant memories:]")
-        for m in results:
-            mtype = m.get("memory_type", "?")
-            score = m.get("score", 0)
-            content = m.get("content", "")[:300]
-            lines.append(f"  [{mtype}|{score:.2f}] {content}")
+    # Honest silence: if nothing genuinely matched, inject nothing at all.
+    if not results:
+        sys.exit(0)
+
+    lines = ["[NEXUS — you remember this from before:]"]
+    for m in results:
+        mtype = m.get("memory_type", "?")
+        rel = m.get("relevance", 0) or 0
+        confirmed = m.get("confirmed_count", 0) or 0
+        contradicted = m.get("contradicted_count", 0) or 0
+        # Surface trust so the model can weight what it recalls.
+        trust = ""
+        if confirmed or contradicted:
+            trust = f" (confirmed {confirmed}×" + (f", contradicted {contradicted}×" if contradicted else "") + ")"
+        content = m.get("content", "")[:300]
+        lines.append(f"  [{mtype}|{rel:.0%} match{trust}] {content}")
 
     print(json.dumps({
         "hookSpecificOutput": {
@@ -77,9 +86,5 @@ try:
     }))
 
 except Exception:
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "UserPromptSubmit",
-            "additionalContext": REFLECTION_NOTE,
-        }
-    }))
+    # On any failure, stay silent rather than inject noise.
+    sys.exit(0)

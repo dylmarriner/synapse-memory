@@ -59,6 +59,7 @@ async def vector_search(
                 id=str(r.id),
                 content=r.content,
                 score=max(0.0, float(r.score)),
+                relevance=max(0.0, min(1.0, float(r.score))),
                 memory_type=r.memory_type,
                 agent_id=str(r.agent_id) if r.agent_id else None,
                 importance=float(r.importance),
