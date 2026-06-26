@@ -60,6 +60,26 @@ try:
     lines.append("\nMemories are recalled on-demand via nexus-recall. Do not ask for a memory dump.")
     lines.append("=== END NEXUS IDENTITY ===")
 
+    # Procedural memory — inject HOW TO WORK HERE if this project has one.
+    if PROJECT_KEY:
+        try:
+            proc_req = urllib.request.Request(
+                f"{NEXUS_URL}/v1/projects/{PROJECT_KEY}/procedures",
+                headers={"Authorization": f"Bearer {NEXUS_TOKEN}"}
+            )
+            proc_resp = urllib.request.urlopen(proc_req, timeout=3)
+            proc_data = json.loads(proc_resp.read())
+            procs = proc_data.get("procedures", [])
+            if procs:
+                lines.append(f"\n=== HOW TO WORK IN {PROJECT_KEY.upper()} ===")
+                # Prefer compacted doc; otherwise concatenate individual entries.
+                combined = "\n".join(p["content"] for p in procs)
+                # Hard cap to keep token cost low.
+                lines.append(combined[:600])
+                lines.append("=== END HOW TO WORK HERE ===")
+        except Exception:
+            pass
+
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",

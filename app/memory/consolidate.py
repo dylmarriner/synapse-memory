@@ -192,6 +192,32 @@ async def consolidate(db: AsyncSession) -> Dict[str, int]:
         except Exception as e:
             log.warning("Prune pass failed: %s", e)
 
+    # Pass 8: Procedure compaction — synthesize 5+ uncompacted project procedures
+    # into one tight "HOW TO WORK HERE" document per project.
+    stats["procedures_compacted"] = 0
+    try:
+        from app.memory.procedures import compact_project_procedures
+        from app.llm import get_llm_client
+        llm = get_llm_client()
+        if llm:
+            proj_rows = await db.execute(text("""
+                SELECT DISTINCT metadata->>'project_key' AS pk
+                FROM memories
+                WHERE memory_type = 'procedure'
+                  AND superseded_by IS NULL
+                  AND COALESCE(metadata->>'compacted', 'false') != 'true'
+                  AND metadata->>'project_key' IS NOT NULL
+                  AND metadata->>'project_key' != ''
+                GROUP BY metadata->>'project_key'
+                HAVING COUNT(*) >= 5
+            """))
+            for prow in proj_rows.fetchall():
+                result = await compact_project_procedures(db, prow.pk, llm)
+                if result:
+                    stats["procedures_compacted"] += 1
+    except Exception as e:
+        log.warning("Procedure compaction pass failed: %s", e)
+
     log.info("Consolidation: %s", stats)
     return stats
 

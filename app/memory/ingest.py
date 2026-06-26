@@ -35,6 +35,24 @@ _FAILURE_MARKERS = (
     "regression", "caused a bug", "made it worse",
 )
 
+# Markers for procedural knowledge — how to work in a repo.
+_PROCEDURE_MARKERS = (
+    "to run ", "to deploy", "to start", "to build", "to test", "to install",
+    "the command", "use the command", "run `", "run this", "$ ", "npm run",
+    "pnpm ", "make ", "docker ", "kubectl ", "python ", "pytest", "cargo ",
+    "gotcha", "don't forget", "make sure to", "always run", "never run",
+    "the trick is", "the order is", "migration", "before starting", "after deploying",
+    "the way to", "how to ", "you need to ", "first run", "then run",
+)
+
+
+def _looks_like_procedure(content: str) -> bool:
+    """Detect procedural knowledge — commands, gotchas, how-to steps."""
+    if len(content) > 1000 or content.strip().endswith("?"):
+        return False
+    low = content.lower()
+    return any(m in low for m in _PROCEDURE_MARKERS)
+
 
 def _estimate_valid_until(content: str) -> Optional[datetime]:
     """Estimate when a fact stops being true, from volatility cues. None = permanent."""
@@ -85,9 +103,23 @@ async def save_memory(
         if importance < 0.7:
             importance = 0.7
 
+    # Auto-detect procedural content when no explicit type is given.
+    memory_type = req.memory_type
+    if memory_type is None and not is_failure and _looks_like_procedure(req.content):
+        memory_type = "procedure"
+
+    # Procedures are permanent — no volatility TTL, pinned importance.
+    if memory_type == "procedure":
+        if importance < 0.8:
+            importance = 0.8
+        # Preserve project_key from metadata so procedures are project-scoped.
+        if req.metadata.get("project_key"):
+            meta["project_key"] = req.metadata["project_key"]
+
     # Shelf life — let the caller win, else estimate from volatility cues.
+    # Procedures and failures are never TTL'd.
     valid_until = getattr(req, "valid_until", None)
-    if valid_until is None and not is_failure:
+    if valid_until is None and not is_failure and memory_type != "procedure":
         valid_until = _estimate_valid_until(req.content)
 
     embedding = await get_embedding(req.content)
@@ -120,7 +152,7 @@ async def save_memory(
         id=uuid.uuid4(),
         agent_id=agent_db_id,
         content=req.content,
-        memory_type=req.memory_type or "observation",
+        memory_type=memory_type or "observation",
         embedding=embedding,
         importance=importance,
         metadata_=meta,
@@ -143,7 +175,7 @@ async def save_memory(
                 "content": req.content,
                 "importance": importance,
                 "needs_embedding": embedding is None,
-                "needs_classification": req.memory_type is None,
+                "needs_classification": memory_type is None,
             }
             await redis_client.rpush("nexus:extract", json.dumps(job))
             extraction_queued = True

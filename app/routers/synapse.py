@@ -221,6 +221,35 @@ async def remember(
     return {"project_key": key, "kind": body_kind, "title": title_str, "status": "saved"}
 
 
+@router.get("/projects/{project_key}/procedures")
+async def get_procedures(project_key: str, db: AsyncSession = Depends(get_db)):
+    """Return the compacted HOW-TO-WORK-HERE document for a project (or individual procedures)."""
+    from app.memory.procedures import get_project_procedures
+    key = _normalize_key(project_key)
+    items = await get_project_procedures(db, key)
+    return {"project_key": key, "count": len(items), "procedures": items}
+
+
+@router.post("/projects/{project_key}/procedures")
+async def save_procedure(project_key: str, body: dict, db: AsyncSession = Depends(get_db)):
+    """Save a new procedure memory for a project."""
+    from app.memory.ingest import save_memory
+    from app.models.api import MemorySaveRequest
+    key = _normalize_key(project_key)
+    content = (body.get("content") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content required")
+    req = MemorySaveRequest(
+        content=content,
+        agent_id=body.get("agent_id", "claude-code"),
+        memory_type="procedure",
+        importance=float(body.get("importance", 0.8)),
+        metadata={"project_key": key, "source": body.get("source", "api")},
+    )
+    result = await save_memory(db, None, req)
+    return {"project_key": key, "memory_id": result.id, "deduplicated": result.deduplicated}
+
+
 @router.post("/projects/{project_key}/recall")
 async def recall(
     project_key: str = "default",

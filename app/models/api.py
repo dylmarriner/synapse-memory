@@ -2,8 +2,8 @@ from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 
-MEMORY_TYPES = ["world", "experience", "observation", "preference", "lesson"]
-MemoryType = Literal["world", "experience", "observation", "preference", "lesson"]
+MEMORY_TYPES = ["world", "experience", "observation", "preference", "lesson", "procedure"]
+MemoryType = Literal["world", "experience", "observation", "preference", "lesson", "procedure"]
 
 
 class MemorySaveRequest(BaseModel):
