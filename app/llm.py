@@ -19,6 +19,22 @@ def get_llm_client():
     return None
 
 
+def get_ollama_client(
+    base_url: str = "http://localhost:11434/v1",
+    model: str = "qwen2.5:0.5b",
+) -> "AsyncOpenAI":
+    """Return an OpenAI-compatible client pointed at a local Ollama instance.
+
+    No API key needed — Ollama accepts any non-empty string.
+    Use this for tiny local models that power the Living Mind.
+    """
+    from openai import AsyncOpenAI
+    return AsyncOpenAI(
+        api_key="ollama",  # Ollama doesn't validate keys
+        base_url=base_url,
+    )
+
+
 async def llm_complete(
     prompt: str,
     max_tokens: int = 400,

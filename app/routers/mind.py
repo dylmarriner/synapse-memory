@@ -68,9 +68,32 @@ def _get_mind(mind_id: str) -> LivingMind:
             log.debug("mind '%s' using InMemoryMindStore", mind_id)
         mind = LivingMind(
             mind_id=mind_id,
-            config=MindConfig(),
+            config=MindConfig(llm_model="qwen2.5:0.5b"),
             memory_store=store,
         )
+        # Wire the LLM client — try Ollama first (local, no API key needed),
+        # then DeepSeek/OpenAI from app.llm, then fall back to deterministic.
+        try:
+            import os
+            from app.llm import get_ollama_client
+            # Use Docker host gateway for Ollama when running in a container,
+            # localhost otherwise.  The env var overrides both.
+            ollama_url = os.environ.get(
+                "OLLAMA_BASE_URL",
+                "http://172.20.0.1:11434/v1",
+            )
+            mind.llm = get_ollama_client(base_url=ollama_url, model="qwen2.5:0.5b")
+            mind.reasoning.llm = mind.llm
+            log.info("mind '%s' using Ollama LLM (qwen2.5:0.5b via %s)", mind_id, ollama_url)
+        except Exception:
+            try:
+                from app.llm import get_llm_client
+                mind.llm = get_llm_client()
+                mind.reasoning.llm = mind.llm
+                if mind.llm:
+                    log.info("mind '%s' using configured LLM (DeepSeek/OpenAI)", mind_id)
+            except Exception:
+                log.debug("mind '%s' running deterministic (no LLM available)", mind_id)
         # Wire the conversation manager to the DB if SessionLocal
         # is available — so turns are persisted.
         try:
