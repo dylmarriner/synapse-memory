@@ -56,7 +56,16 @@ def _get_mind(mind_id: str) -> LivingMind:
     is fast.
     """
     if mind_id not in _MINDS:
-        store = InMemoryMindStore()
+        # Use the real Nexus memory store when the DB is available;
+        # fall back to the in-memory store otherwise (tests, embedded).
+        try:
+            from app.db import SessionLocal
+            from app.mind.store import NexusMemoryStore
+            store = NexusMemoryStore(db_session_factory=SessionLocal)
+            log.debug("mind '%s' using NexusMemoryStore", mind_id)
+        except Exception:
+            store = InMemoryMindStore()
+            log.debug("mind '%s' using InMemoryMindStore", mind_id)
         mind = LivingMind(
             mind_id=mind_id,
             config=MindConfig(),
