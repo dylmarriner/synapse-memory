@@ -1,0 +1,42 @@
+# Claude Code + Living Mind integration
+#
+# This plugin wires Claude Code to a running Nexus server so the
+# agent's system prompt is seeded with the Living Mind's identity
+# + proactive context + opinions at every session start, and so
+# every tool use is captured as a memory for the mind to learn
+# from.
+#
+# Install:
+#   cp -r integrations/plugins/claude-code-mind ~/.claude/plugins/mind
+#   # or:
+#   claude plugin install /path/to/synapse-memory/integrations/plugins/claude-code-mind
+#
+# Configure (in ~/.claude/settings.json):
+#   {
+#     "env": {
+#       "NEXUS_URL":    "http://localhost:7777",
+#       "NEXUS_SECRET": "your-bearer-token",
+#       "MIND_ID":      "default",
+#       "AGENT_ID":     "claude-code"
+#     },
+#     "hooks": {
+#       "SessionStart":     ["python3 $PLUGIN_DIR/hooks/session_start.py"],
+#       "UserPromptSubmit": ["python3 $PLUGIN_DIR/hooks/prompt_submit.py"],
+#       "PostToolUse":      ["python3 $PLUGIN_DIR/hooks/post_tool_use.py"],
+#       "Stop":             ["python3 $PLUGIN_DIR/hooks/session_end.py"]
+#     }
+#   }
+name: claude-code-mind
+version: 1.0.0
+description: Living Mind integration for Claude Code — the agent's system prompt is seeded with the mind's identity, proactive context, and opinions at every session start; every tool use is captured as a memory for the mind to learn from.
+hooks:
+  SessionStart:
+    - python3 $PLUGIN_DIR/hooks/session_start.py
+  UserPromptSubmit:
+    - python3 $PLUGIN_DIR/hooks/prompt_submit.py
+  PostToolUse:
+    - python3 $PLUGIN_DIR/hooks/post_tool_use.py
+  Stop:
+    - python3 $PLUGIN_DIR/hooks/session_end.py
+skills:
+  - mind-memory

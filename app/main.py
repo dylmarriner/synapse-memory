@@ -58,6 +58,8 @@ from app.routers.synapse import router as synapse_router
 from app.routers.compat import router as compat_router
 from app.routers.graph import router as graph_router
 from app.routers.hooks import router as hooks_router
+from app.routers.adopted import router as adopted_router
+from app.routers.mind import router as mind_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -271,6 +273,41 @@ async def _run_migrations():
             except Exception as e:
                 log.warning("Session index skipped: %s", e)
 
+        # Adopted-pattern tables (migration 005).  Each block is wrapped
+        # in its own try/except so a partial migration never blocks startup.
+        try:
+            with open("/home/macuntu/Documents/synapse-memory/migrations/005_adopted.sql") as _f:
+                adopted_sql = _f.read()
+            for stmt in [s.strip() for s in adopted_sql.split(";") if s.strip()]:
+                # Skip pure comments / blanks.
+                if not stmt or all(line.strip().startswith("--") for line in stmt.splitlines() if line.strip()):
+                    continue
+                try:
+                    await conn.execute(text(stmt))
+                except Exception as e:
+                    log.debug("Adopted SQL step skipped: %s", e)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            log.warning("Adopted migration block failed: %s", e)
+
+        # Living Mind tables (migration 006).  Same try/except pattern —
+        # never block startup on a partial migration.
+        try:
+            with open("/home/macuntu/Documents/synapse-memory/migrations/006_living_mind.sql") as _f:
+                mind_sql = _f.read()
+            for stmt in [s.strip() for s in mind_sql.split(";") if s.strip()]:
+                if not stmt or all(line.strip().startswith("--") for line in stmt.splitlines() if line.strip()):
+                    continue
+                try:
+                    await conn.execute(text(stmt))
+                except Exception as e:
+                    log.debug("Mind SQL step skipped: %s", e)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            log.warning("Living Mind migration block failed: %s", e)
+
 
         # Backfill basic device metadata so the dashboard can place legacy agents.
         try:
@@ -306,6 +343,38 @@ async def _learning_loop(redis_client: aioredis.Redis, interval: int):
             log.warning("Learning loop push failed: %s", e)
 
 
+async def _mind_periodic_learning_loop(interval_seconds: int = 3600):
+    """Periodic mind learning: prune old patterns, consolidate identity.
+
+    Runs every `interval_seconds` (default: 1 hour).  The work is
+    intentionally light — it touches the in-process mind registry
+    only, never the database.  Per-mind work is also light: prune
+    patterns older than 90 days, recompute the self-description.
+    """
+    # Lazily import the mind module — it's a separate subsystem.
+    from app.mind import Identity
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            # Get all in-process minds from the router.
+            from app.routers import mind as mind_router
+            minds = list(mind_router._MINDS.values())
+            for mind in minds:
+                try:
+                    pruned = mind.identity.prune_old_patterns(
+                        max_age_days=90, max_patterns=200
+                    )
+                    if pruned:
+                        log.info(
+                            "mind '%s' pruned %d old patterns",
+                            mind.mind_id, pruned,
+                        )
+                except Exception as e:
+                    log.debug("mind '%s' pruning failed: %s", mind.mind_id, e)
+        except Exception as e:
+            log.warning("Mind periodic learning failed: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("Nexus starting — port %d", settings.nexus_port)
@@ -320,6 +389,13 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(
         _learning_loop(redis_client, settings.learning_interval)
     )
+
+    # Periodic Living Mind learning — prune old patterns every hour.
+    mind_learning_interval = int(getattr(settings, "mind_learning_interval_seconds", 3600))
+    mind_learning_task = asyncio.create_task(
+        _mind_periodic_learning_loop(mind_learning_interval)
+    )
+    log.info("Mind periodic learning started (every %ds)", mind_learning_interval)
     
     # Start the scheduler for daily consolidation reports
     from app.scheduler import scheduler_loop
@@ -336,6 +412,7 @@ async def lifespan(app: FastAPI):
     yield
 
     task.cancel()
+    mind_learning_task.cancel()
     scheduler_task.cancel()
     push_daemon.stop()
     push_task.cancel()
@@ -393,6 +470,8 @@ app.include_router(synapse_router, prefix="/v1/synapse", tags=["synapse"], depen
 app.include_router(compat_router, prefix="/v1",        tags=["compat"],  dependencies=[Depends(_verify_key)])
 app.include_router(graph_router,  prefix="/v1",        tags=["graph"],   dependencies=[Depends(_verify_key)])
 app.include_router(hooks_router,  prefix="/v1/hooks",  tags=["hooks"],   dependencies=[Depends(_verify_key)])
+app.include_router(adopted_router,                     tags=["adopted"], dependencies=[Depends(_verify_key)])
+app.include_router(mind_router,                        tags=["mind"],    dependencies=[Depends(_verify_key)])
 
 
 @app.get("/.well-known/nexus/openapi.json", include_in_schema=False)
@@ -403,6 +482,48 @@ async def nexus_openapi_spec():
 @app.get("/.well-known/nexus/plugin-manifest.json", include_in_schema=False)
 async def nexus_plugin_manifest():
     return FileResponse("integrations/plugins/universal-agent-plugin.manifest.json", media_type="application/json")
+
+
+@app.get("/v1/mind/dashboard/panel", include_in_schema=False)
+async def mind_dashboard_panel(mind_id: str = "default"):
+    """A small HTML panel of one mind's state for the main dashboard.
+
+    Returns a self-contained HTML fragment that the operator's
+    dashboard can fetch and inject.  Includes identity summary,
+    learned patterns, active opinions, and recent conversations.
+    """
+    from app.routers.mind import dashboard as _mind_dashboard
+    data = await _mind_dashboard(mind_id=mind_id)
+    html_parts = [
+        "<section class='mind-dashboard'>",
+        f"<h2>Living Mind: {data['mind_id']}</h2>",
+        f"<p class='description'>{data['self_description']}</p>",
+        "<div class='stats'>",
+        f"  <span>patterns: {data['stats']['patterns_learned']}</span>",
+        f"  <span>capabilities: {data['stats']['capabilities']}</span>",
+        f"  <span>opinions: {data['stats']['opinions_held']}</span>",
+        f"  <span>relationships: {data['stats']['relationships']}</span>",
+        f"  <span>conversations: {data['stats']['active_conversations']}</span>",
+        "</div>",
+    ]
+    if data.get("opinions"):
+        html_parts.append("<h3>Active opinions</h3><ul>")
+        for topic, op in data["opinions"].items():
+            stance = op.get("stance", "?")
+            strength = op.get("strength", 0)
+            html_parts.append(
+                f"<li><b>{topic}</b>: {stance} "
+                f"(strength {strength:.2f}, "
+                f"{op.get('evidence_count', 0)} pieces of evidence)</li>"
+            )
+        html_parts.append("</ul>")
+    if data["identity"].get("learned_patterns"):
+        html_parts.append("<h3>Recent patterns</h3><ul>")
+        for p in data["identity"]["learned_patterns"][-5:]:
+            html_parts.append(f"<li>{p['description']}</li>")
+        html_parts.append("</ul>")
+    html_parts.append("</section>")
+    return HTMLResponse(content="\n".join(html_parts))
 
 
 @app.get("/health")
@@ -443,6 +564,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}.app{height:100%
     <nav class="nav">
       <button class="active" data-tab="overview" onclick="switchTab('overview')">◇ Overview</button>
       <button data-tab="vault" onclick="switchTab('vault')">▣ Memory Vault</button>
+      <button data-tab="mind" onclick="switchTab('mind')">◉ Living Mind</button>
       <button data-tab="agents" onclick="switchTab('agents')">⌬ Agent Registry</button>
       <button data-tab="sessions" onclick="switchTab('sessions')">◷ Sessions</button>
       <button data-tab="recalllab" onclick="switchTab('recalllab')">◬ Recall Lab</button>
@@ -471,7 +593,32 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}.app{height:100%
     <section id="tab-vault" class="tabs vault">
       <div class="tools"><input class="field" type="text" id="search-input" placeholder="Search the memory lattice…"><select class="field" id="type-filter"><option value="">All types</option><option value="world">World</option><option value="experience">Experience</option><option value="observation">Observation</option><option value="preference">Preference</option><option value="lesson">Lesson</option></select><button class="action" onclick="loadMemories()">Scan</button></div>
       <div class="memories" id="memories"></div>
-      <div class="pagination" id="pagination" style="display:none"><button class="page-btn" id="prev-btn" onclick="changePage(-1)" disabled>← Prev</button><span class="page-info" id="page-info"></span><button class="page-btn" id="next-btn" onclick="changePage(1)">Next →</button></div>
+      <div class="pagination" id="pagination" style="display:none"><button class="page-btn" id="prev-btn" onclick="changePage(-1)" disabled>← Prev</button><span class="page-info" id="page-info"></span><button class="page-btn" id="next-btn" onclick="changePage(1)" disabled>Next →</button></div>
+    </section>
+
+    <section id="tab-mind" class="tabs">
+      <div class="statGrid">
+        <div class="stat"><div class="lbl">Patterns</div><div class="val" id="m-patterns">…</div><div class="sig">LEARNED</div></div>
+        <div class="stat"><div class="lbl">Opinions</div><div class="val" id="m-opinions">…</div><div class="sig">HELD</div></div>
+        <div class="stat"><div class="lbl">Conversations</div><div class="val" id="m-conversations">…</div><div class="sig">ACTIVE</div></div>
+        <div class="stat"><div class="lbl">Relationships</div><div class="val" id="m-relationships">…</div><div class="sig">KNOWN</div></div>
+      </div>
+      <div class="overviewGrid" style="grid-template-columns:1fr 1fr;gap:16px">
+        <div class="panel" style="min-height:140px"><h3>Mind Identity</h3><pre class="consoleOut" id="mind-identity" style="white-space:pre-wrap;max-height:280px;overflow:auto">Loading mind…</pre></div>
+        <div class="panel" style="min-height:140px"><h3>Active Opinions</h3><div class="consoleOut" id="mind-opinions" style="max-height:280px;overflow:auto">Loading…</div></div>
+      </div>
+      <div class="overviewGrid" style="grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+        <div class="panel" style="min-height:160px"><h3>Learned Patterns (recent)</h3><div class="consoleOut" id="mind-patterns" style="max-height:280px;overflow:auto">Loading…</div></div>
+        <div class="panel" style="min-height:160px"><h3>Relationships</h3><div class="consoleOut" id="mind-relationships" style="max-height:280px;overflow:auto">Loading…</div></div>
+      </div>
+      <div class="panel" style="margin-top:16px"><h3>Ask the Mind</h3>
+        <div class="consoleForm">
+          <input class="field" type="text" id="mind-question" placeholder="What do you know about X?">
+          <select class="field" id="mind-depth"><option value="fast">fast</option><option value="standard" selected>standard</option><option value="deep">deep</option></select>
+          <button class="action" onclick="askMind()">Think</button>
+        </div>
+        <pre class="consoleOut" id="mind-answer" style="min-height:120px;max-height:400px;overflow:auto;white-space:pre-wrap">Ask the mind a question to see reasoned output here.</pre>
+      </div>
     </section>
 
     <section id="tab-agents" class="tabs agentsTab"><div class="panel"><h3>Selected Channel</h3><div id="agent-detail" class="consoleOut">Select an agent channel to inspect.</div></div><div class="agentCards" id="agent-cards"></div></section>
@@ -492,12 +639,12 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}.app{height:100%
 const TOKEN = "__NEXUS_TOKEN__";
 const LIMIT = 20;
 let state = { agent:null, type:"", query:"", offset:0, total:0, liveCount:0, agents:[], recallReport:null };
-const tabNames = {overview:["Command Overview","Memory Constellation"],vault:["Memory Vault","Recall Archive"],agents:["Agent Registry","Channel Topology"],sessions:["Sessions","Raw Timeline · Provenance"],recalllab:["Recall Lab","Mode Comparison · Fusion"],ops:["Operations","RTK · Sessions · Telemetry"],console:["Neural Console","Direct Recall Interface"]};
+const tabNames = {overview:["Command Overview","Memory Constellation"],vault:["Memory Vault","Recall Archive"],mind:["Living Mind","Reasoning Layer · Identity · Opinions"],agents:["Agent Registry","Channel Topology"],sessions:["Sessions","Raw Timeline · Provenance"],recalllab:["Recall Lab","Mode Comparison · Fusion"],ops:["Operations","RTK · Sessions · Telemetry"],console:["Neural Console","Direct Recall Interface"]};
 function apiFetch(path, opts={}){return fetch(path,{...opts,headers:{Authorization:"Bearer "+TOKEN,"Content-Type":"application/json",...(opts.headers||{})}}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json();});}
 function escHtml(s){return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
 function deviceLabel(a){return a?.device||a?.hostname||a?.source||"Unknown Device";}
 function deviceClass(a){return (a?.device||a?.hostname||a?.source)?"deviceChip":"deviceChip unknown";}
-function switchTab(tab){document.querySelectorAll('.tabs').forEach(e=>e.classList.remove('active'));document.getElementById('tab-'+tab).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.getElementById('tab-eyebrow').textContent=tabNames[tab][0];document.getElementById('tab-title').textContent=tabNames[tab][1];if(tab==='vault')loadMemories();if(tab==='agents')renderAgentCards();if(tab==='sessions')loadSessions();if(tab==='ops')loadOps();}
+function switchTab(tab){document.querySelectorAll('.tabs').forEach(e=>e.classList.remove('active'));document.getElementById('tab-'+tab).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.getElementById('tab-eyebrow').textContent=tabNames[tab][0];document.getElementById('tab-title').textContent=tabNames[tab][1];if(tab==='vault')loadMemories();if(tab==='mind')loadMind();if(tab==='agents')renderAgentCards();if(tab==='sessions')loadSessions();if(tab==='ops')loadOps();}
 function typeBadgeClass(t){return ({world:'badge-world',experience:'badge-experience',observation:'badge-observation',preference:'badge-preference',lesson:'badge-lesson'}[t]||'badge-other');}
 function fmtDate(dt){if(!dt)return'';const d=new Date(dt);return d.toLocaleDateString()+" "+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}
 function renderMemory(m){const imp=Math.round((m.importance||0)*100);return `<div class="mem-card" id="mc-${m.id}"><div class="mem-header"><span class="type-badge ${typeBadgeClass(m.memory_type)}">${escHtml(m.memory_type)}</span><span class="mem-agent">${escHtml(m.agent_name||m.agent_id||'?')}</span><span class="mem-date">${fmtDate(m.created_at)}</span></div><div class="mem-content">${escHtml(m.content)}</div><div class="mem-footer"><span class="mem-meta">importance ${imp}% <span class="imp-bar"><span class="imp-fill" style="width:${imp}%"></span></span> · accessed ${m.access_count||0}x ${m.confirmed_count?' · ✓ '+m.confirmed_count:''}${m.contradicted_count?' · ⚠ '+m.contradicted_count:''}</span><button class="del-btn" onclick="deleteMemory('${m.id}')">Delete</button></div></div>`;}
@@ -505,6 +652,11 @@ async function loadMemories(){const el=document.getElementById('memories');el.in
 function updatePagination(){const pages=Math.ceil(state.total/LIMIT);const cur=Math.floor(state.offset/LIMIT)+1;const p=document.getElementById('pagination');if(pages<=1){p.style.display='none';return;}p.style.display='flex';document.getElementById('page-info').textContent=`Sector ${cur}/${pages} · ${state.total} records`;document.getElementById('prev-btn').disabled=state.offset===0;document.getElementById('next-btn').disabled=state.offset+LIMIT>=state.total;}
 function changePage(dir){state.offset=Math.max(0,state.offset+dir*LIMIT);loadMemories();}
 async function loadStats(){try{const d=await apiFetch('/v1/browse/stats');document.getElementById('s-memories').textContent=d.total_memories;document.getElementById('s-agents').textContent=d.total_agents;document.getElementById('s-entities').textContent=d.total_entities;document.getElementById('s-conclusions').textContent=d.total_conclusions;document.getElementById('type-pills').innerHTML=(d.by_type||[]).map(t=>`<span class="pill${state.type===t.memory_type?' active':''}" onclick="filterType('${t.memory_type}')">${escHtml(t.memory_type)} <b>${t.count}</b></span>`).join('');}catch(e){}}
+
+
+async function loadMind(){try{const d=await apiFetch('/v1/mind/dashboard?mind_id=default');document.getElementById('m-patterns').textContent=d.stats.patterns_learned;document.getElementById('m-opinions').textContent=d.stats.opinions_held;document.getElementById('m-conversations').textContent=d.stats.active_conversations;document.getElementById('m-relationships').textContent=d.stats.relationships;document.getElementById('mind-identity').textContent=d.self_description;const ops=d.opinions||{};const opLines=Object.keys(ops).length?Object.entries(ops).map(([t,o])=>`  ${t.padEnd(28)}  ${(o.stance||'?').padEnd(9)}  strength=${(o.strength||0).toFixed(2)}  evidence=${o.evidence_count||0}`).join('\n'):'  No opinions held yet — ask the mind a question to form one.';document.getElementById('mind-opinions').textContent=opLines;const pats=(d.identity&&d.identity.learned_patterns)||[];const patLines=pats.length?pats.slice(-10).reverse().map(p=>`  · [imp ${(p.importance||0).toFixed(2)}] ${escHtml(p.description)}`).join('\n'):'  No patterns learned yet.';document.getElementById('mind-patterns').textContent=patLines;const rels=d.relationships||{};const relLines=Object.keys(rels).length?Object.entries(rels).map(([a,r])=>`  ${a.padEnd(20)}  trust=${(r.trust_level||0).toFixed(2)}  interactions=${r.interaction_count||0}  style=${r.communication_style||'-'}`).join('\n'):'  No agent relationships yet.';document.getElementById('mind-relationships').textContent=relLines;}catch(e){document.getElementById('mind-identity').textContent='Mind load failed: '+e.message;}}
+
+async function askMind(){const q=document.getElementById('mind-question').value.trim();if(!q)return;const depth=document.getElementById('mind-depth').value;const out=document.getElementById('mind-answer');out.textContent='MIND:// thinking...';try{const d=await apiFetch('/v1/mind/think',{method:'POST',body:JSON.stringify({mind_id:'default',question:q,reasoning_depth:depth})});let out_text='';if(d.answer)out_text+=d.answer+'\n\n';if(d.clarifying_question)out_text+='[Question back: '+d.clarifying_question+']\n\n';out_text+=`[confidence: ${(d.confidence||0).toFixed(2)} | memories: ${(d.memories_cited||[]).length} | proactive items: ${(d.proactive_context||[]).length}]\n`;if((d.proactive_context||[]).length){out_text+='\nProactive context:\n';d.proactive_context.forEach(item=>{out_text+=`  - [${item.type||'?'}] ${item.content||''} (relevance ${(item.relevance||0).toFixed(2)})\n`;});}if((d.opinions_expressed||[]).length){out_text+='\nMy take:\n';d.opinions_expressed.forEach(op=>{out_text+=`  - ${op.topic}: ${op.stance} (strength ${(op.strength||0).toFixed(2)})\n`;});}out.textContent=out_text;}catch(e){out.textContent='MIND:// think failed: '+e.message;}}
 async function loadOps(){try{const [m,r]=await Promise.all([apiFetch('/v1/admin/metrics'),apiFetch('/v1/admin/rtk/summary')]);document.getElementById('o-sessions').textContent=m.totals?.sessions??0;document.getElementById('o-messages').textContent=m.totals?.messages??0;document.getElementById('o-rtk-tokens').textContent=r.tokens_saved_estimate??0;document.getElementById('o-rtk-fail').textContent=r.failures??0;document.getElementById('ops-rtk-agents').textContent=(r.by_agent||[]).map(a=>`${a.agent_id}: ${a.tokens_saved_estimate} tokens · ${a.count} cmds · ${a.failures} failures`).join('\n')||'No RTK telemetry yet.';document.getElementById('ops-events').textContent=(m.recent_events||[]).slice(0,12).map(e=>`${fmtDate(e.created_at)} ${e.action} ${e.actor||''}`).join('\n')||'No recent events.';}catch(e){document.getElementById('ops-events').textContent='Operations load failed: '+e.message;}}
 async function loadSessions(){const el=document.getElementById('session-list');el.textContent='Loading sessions…';try{const sessions=await apiFetch('/v1/sessions?limit=50');el.innerHTML=(sessions||[]).map(s=>`<div class="agent-item" onclick="showSession('${s.id}')"><span><b>${escHtml(s.title||s.id.slice(0,8))}</b><br><span class="deviceChip">${escHtml(s.agent_id||'?')} · ${escHtml(s.project_key||'-')} · ${s.message_count||0} msgs</span></span><span class="agent-count">${s.ended_at?'✓':'●'}</span></div>`).join('')||'<div class="empty">No sessions archived yet.</div>';}catch(e){el.textContent='Session load failed: '+e.message;}}
 async function showSession(id){const el=document.getElementById('session-detail');el.textContent='Loading session '+id+'…';try{const s=await apiFetch('/v1/sessions/'+encodeURIComponent(id)+'?limit=200');el.textContent=`SESSION: ${s.id}
@@ -558,8 +710,10 @@ async function deleteMemory(id){if(!confirm('Purge this memory record?'))return;
 async function runRecall(){const q=document.getElementById('recall-query').value.trim();if(!q)return;const out=document.getElementById('console-output');out.textContent='NEXUS:// recalling…';try{const d=await apiFetch('/v1/memory/recall',{method:'POST',body:JSON.stringify({query:q,agent_id:state.agent,limit:8})});out.textContent='NEXUS:// recall complete\\nModes: '+d.modes_used.join(', ')+'\\n\\n'+d.results.map((m,i)=>`${i+1}. [${m.memory_type}] score=${Number(m.score||0).toFixed(3)}\\n${m.content}`).join('\\n\\n');}catch(e){out.textContent='NEXUS:// recall failed '+e.message;}}
 let searchTimer;document.getElementById('search-input').addEventListener('input',e=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{state.query=e.target.value.trim();state.offset=0;loadMemories();},300);});document.getElementById('type-filter').addEventListener('change',e=>{state.type=e.target.value;state.offset=0;loadStats();loadMemories();});
 function connectSSE(){const ticker=document.getElementById('ticker');const es=new EventSource('/v1/stream?'+new URLSearchParams({Authorization:'Bearer '+TOKEN}));es.addEventListener('connected',()=>{ticker.innerHTML='⚡ Live telemetry connected';document.getElementById('live-count').textContent='connected';});es.addEventListener('memory',e=>{const d=JSON.parse(e.data);state.liveCount++;document.getElementById('live-count').textContent=state.liveCount+' new';ticker.innerHTML=`<span class="ticker-event">⚡ [${escHtml(d.memory_type||'memory')}] <b>${escHtml(d.agent_name||'?')}:</b> ${escHtml((d.content||'').slice(0,140))}</span>`;if(state.offset===0&&!state.query&&!state.type&&!state.agent)loadMemories();loadStats();loadAgents();});es.onerror=()=>{ticker.innerHTML='⚡ telemetry interrupted — reconnecting…';document.getElementById('live-count').textContent='reconnecting';es.close();setTimeout(connectSSE,5000);};}
-function loadAll(){loadStats();loadAgents();loadMemories();loadOps();}
+function loadAll(){loadStats();loadAgents();loadMemories();loadOps();loadMind();}
 loadAll();connectSSE();setInterval(loadAll,30000);
+// Live mind refresh — every 5s, ping the mind to keep state hot
+setInterval(loadMind,5000);
 </script>
 </body>
 </html>

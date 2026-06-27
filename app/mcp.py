@@ -628,7 +628,115 @@ TOOLS = [
         "name": "synapse_compat_health",
         "description": "Health check for synapse-compat tables.",
         "inputSchema": {"type": "object", "properties": {}},
-    },]
+    },
+    # ---- Living Mind tools (adopted) ---------------------------------------
+    # The Mind is a reasoning layer on top of the memory store.  These
+    # tools let an agent converse with the Mind rather than query a
+    # database — the Mind retrieves memories, reasons about them,
+    # forms opinions, and proactively surfaces context.
+    {
+        "name": "mind_think",
+        "description": (
+            "Ask the living mind a question and get a reasoned response. "
+            "The mind retrieves relevant memories, reasons about them, "
+            "forms opinions, and proactively surfaces context. Use this "
+            "when you need context, an explanation, or a thoughtful opinion."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "The question to ask the mind."},
+                "mind_id": {"type": "string", "default": "default"},
+                "context": {"type": "object", "description": "Optional context (agent_id, etc.)."},
+                "reasoning_depth": {"type": "string", "enum": ["fast", "standard", "deep"]},
+            },
+            "required": ["question"],
+        },
+    },
+    {
+        "name": "mind_reflect",
+        "description": "Ask the mind to reflect deeply on a topic. Synthesises many memories into a single coherent narrative.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string"},
+                "mind_id": {"type": "string", "default": "default"},
+                "depth": {"type": "string", "enum": ["low", "mid", "high"], "default": "mid"},
+            },
+            "required": ["topic"],
+        },
+    },
+    {
+        "name": "mind_start_conversation",
+        "description": "Start a multi-turn conversation with the mind. Returns a conversation_id for subsequent turns.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string"},
+                "mind_id": {"type": "string", "default": "default"},
+            },
+            "required": ["agent_id"],
+        },
+    },
+    {
+        "name": "mind_conversation_turn",
+        "description": "Send a turn in an ongoing conversation with the mind.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "conversation_id": {"type": "string"},
+                "message": {"type": "string"},
+                "mind_id": {"type": "string", "default": "default"},
+            },
+            "required": ["conversation_id", "message"],
+        },
+    },
+    {
+        "name": "mind_end_conversation",
+        "description": "End a conversation with the mind and extract learnings.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "conversation_id": {"type": "string"},
+                "mind_id": {"type": "string", "default": "default"},
+            },
+            "required": ["conversation_id"],
+        },
+    },
+    {
+        "name": "mind_get_identity",
+        "description": "Get the mind's current self-model — core traits, learned patterns, capabilities, and limitations.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mind_id": {"type": "string", "default": "default"},
+            },
+        },
+    },
+    {
+        "name": "mind_get_opinions",
+        "description": "Get the mind's opinions on topics. Returns stance, strength, and evidence count.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mind_id": {"type": "string", "default": "default"},
+                "topic": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "mind_get_proactive",
+        "description": "Get proactive context the mind thinks is relevant — unfinished promises, recent related work, contradictions, patterns.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mind_id": {"type": "string", "default": "default"},
+                "agent_id": {"type": "string", "default": "agent"},
+                "question": {"type": "string"},
+            },
+        },
+    },
+]
 
 async def _dispatch(tool: str, args: dict, request: Request) -> str:
     import httpx
@@ -1352,6 +1460,114 @@ async def _dispatch(tool: str, args: dict, request: Request) -> str:
             r.raise_for_status()
             d = r.json()
             return f"Synapse compat health: projects={d['projects']} files={d['files']} events={d['events']}"
+
+        # ---- Living Mind (adopted) ------------------------------------
+        elif tool == "mind_think":
+            r = await client.post(f"{base}/v1/mind/think", json=args, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+            parts = []
+            if d.get("answer"):
+                parts.append(d["answer"])
+            if d.get("clarifying_question"):
+                parts.append(f"Question back: {d['clarifying_question']}")
+            if d.get("proactive_context"):
+                parts.append("\nProactive context:")
+                for item in d["proactive_context"][:3]:
+                    parts.append(f"  - {item['content']} (relevance {item['relevance']:.2f})")
+            if d.get("opinions_expressed"):
+                parts.append("\nMy take:")
+                for op in d["opinions_expressed"]:
+                    parts.append(f"  - {op['topic']}: {op['stance']} (strength {op['strength']:.2f})")
+            parts.append(f"\nConfidence: {d.get('confidence', 0):.2f} | Memories: {len(d.get('memories_cited', []))}")
+            return "\n".join(parts)
+
+        elif tool == "mind_reflect":
+            r = await client.post(f"{base}/v1/mind/reflect", json=args, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+            return d.get("answer") or "No reflection available."
+
+        elif tool == "mind_start_conversation":
+            r = await client.post(f"{base}/v1/mind/conversations/start", json=args, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+            return f"Started conversation {d['conversation_id']} with mind '{d['mind_id']}'."
+
+        elif tool == "mind_conversation_turn":
+            conv_id = args.pop("conversation_id")
+            r = await client.post(
+                f"{base}/v1/mind/conversations/{conv_id}/turn",
+                json=args, headers=headers,
+            )
+            r.raise_for_status()
+            d = r.json()
+            parts = []
+            if d.get("answer"):
+                parts.append(d["answer"])
+            if d.get("clarifying_question"):
+                parts.append(f"Question back: {d['clarifying_question']}")
+            return "\n".join(parts) if parts else "(no response)"
+
+        elif tool == "mind_end_conversation":
+            conv_id = args.pop("conversation_id")
+            r = await client.post(
+                f"{base}/v1/mind/conversations/{conv_id}/end",
+                json=args, headers=headers,
+            )
+            r.raise_for_status()
+            d = r.json()
+            insights = d.get("insights", [])
+            return (
+                f"Conversation ended. {d.get('turn_count', 0)} turns. "
+                f"{len(insights)} learnings extracted: {insights}"
+            )
+
+        elif tool == "mind_get_identity":
+            mid = args.get("mind_id", "default")
+            r = await client.get(f"{base}/v1/mind/identity/{mid}", headers=headers)
+            r.raise_for_status()
+            return r.json().get("description", "No description available.")
+
+        elif tool == "mind_get_opinions":
+            mid = args.get("mind_id", "default")
+            topic = args.get("topic")
+            url = f"{base}/v1/mind/opinions/{mid}"
+            if topic:
+                url += f"?topic={topic}"
+            r = await client.get(url, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+            opinions = d.get("opinions", {})
+            if not opinions:
+                return "No opinions held yet."
+            if not isinstance(opinions, dict):
+                return f"Opinion on '{topic}': {opinions}"
+            lines = ["Mind's opinions:"]
+            for topic_name, op in opinions.items():
+                if op is None:
+                    continue
+                lines.append(f"  - {topic_name}: {op['stance']} (strength {op['strength']:.2f}, {op['evidence_count']} pieces of evidence)")
+            return "\n".join(lines)
+
+        elif tool == "mind_get_proactive":
+            mid = args.get("mind_id", "default")
+            agent_id = args.get("agent_id", "agent")
+            question = args.get("question", "What should I know right now?")
+            r = await client.post(f"{base}/v1/mind/think", json={
+                "mind_id": mid,
+                "question": question,
+                "context": {"agent_id": agent_id, "proactive_only": True},
+            }, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+            items = d.get("proactive_context", [])
+            if not items:
+                return "No proactive context to surface."
+            lines = ["Proactive context from the mind:"]
+            for item in items[:5]:
+                lines.append(f"  - [{item['type']}] {item['content']} (relevance {item['relevance']:.2f})")
+            return "\n".join(lines)
 
         else:
             raise HTTPException(status_code=404, detail=f"Unknown tool: {tool}")

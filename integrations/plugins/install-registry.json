@@ -1,0 +1,314 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "id": "nexus-memory",
+  "name": "Nexus Memory",
+  "version": "1.0.0",
+  "description": "Unified long-term memory for AI agents. 4-way recall (vector + lexical + graph + temporal), lessons, entity graph, rolling summaries. Shared across all agents and devices via Tailscale.",
+  "homepage": "https://github.com/dylanmarriner/shared-memory-mcp",
+  "license": "MIT",
+  "endpoints": {
+    "dashboard": "http://100.93.75.87:7777/",
+    "mcp_http": "http://100.93.75.87:7777/mcp",
+    "mcp_sse": "http://100.93.75.87:7777/mcp/sse",
+    "openapi": "http://100.93.75.87:7777/.well-known/nexus/openapi.json",
+    "plugin_manifest": "http://100.93.75.87:7777/.well-known/nexus/plugin-manifest.json",
+    "rest_base": "http://100.93.75.87:7777/v1"
+  },
+  "auth": {
+    "type": "bearer",
+    "env": "NEXUS_SECRET"
+  },
+  "install": {
+    "one_liner": "curl -fsSL https://raw.githubusercontent.com/dylanmarriner/shared-memory-mcp/main/scripts/nexus-install-remote.sh | bash",
+    "local": "scripts/nexus-install",
+    "from_repo": {
+      "git": "https://github.com/dylanmarriner/shared-memory-mcp.git",
+      "path": "scripts/nexus-install"
+    },
+    "npm": "@nexus/memory",
+    "pypi": "nexus-sdk",
+    "pipx": "pipx run --spec nexus-sdk nexus-install"
+  },
+  "install_layers": {
+    "connection": {
+      "description": "MCP server / plugin registration / config so the agent can call Nexus tools.",
+      "default": true
+    },
+    "rules": {
+      "description": "Global instruction files that teach the agent when to recall/save/reflect.",
+      "default": true,
+      "scope": "global (default $HOME) or project (--local cwd)",
+      "canonical_source": "integrations/rules/nexus-memory.md",
+      "targets": {
+        "claude-code": "~/.claude/CLAUDE.md",
+        "claude-desktop": "~/.claude/CLAUDE.md",
+        "gemini-cli": "~/.gemini/GEMINI.md",
+        "qwen-code": "~/.qwen/QWEN.md",
+        "codex-cli": "~/.codex/AGENTS.md",
+        "aider": "~/.aider/CONVENTIONS.md",
+        "devin": "~/.devin/NEXUS.md",
+        "continue": "~/.continue/NEXUS.md",
+        "zed": "~/.zed/AGENTS.md",
+        "amp": "~/.config/amp/AGENTS.md",
+        "opencode": "~/.config/opencode/AGENTS.md",
+        "antigravity": "~/.gemini/antigravity/AGENTS.md",
+        "trae": "~/.config/Trae/AGENTS.md",
+        "pearai": "~/.config/PearAI/AGENTS.md",
+        "github-copilot": "<cwd>/.github/copilot-instructions.md (project-only)",
+        "cline": "~/.config/nexus/rules/cline.md (symlink to .clinerules)",
+        "cursor": "~/.config/nexus/rules/cursor.mdc (symlink to .cursor/rules/nexus-memory.mdc)",
+        "windsurf": "~/.config/nexus/rules/windsurf.md (symlink to .windsurfrules)"
+      }
+    },
+    "skills": {
+      "description": "Reusable nexus-memory skill the LLM can discover and invoke.",
+      "default": false,
+      "flag": "--with-skills",
+      "canonical_source": "integrations/skills/nexus-memory/SKILL.md",
+      "targets": {
+        "claude-code": "~/.claude/skills/nexus-memory/SKILL.md",
+        "opencode": "~/.config/opencode/skills/nexus-memory/SKILL.md",
+        "continue": "~/.continue/config.yaml (slash command)"
+      }
+    },
+    "hooks": {
+      "description": "Event-driven auto-recall/auto-save hooks for Claude Code.",
+      "default": false,
+      "flag": "--with-hooks",
+      "canonical_source": "scripts/hooks/{session_start,prompt_recall,stop_learn}.py",
+      "targets": {
+        "claude-code": "~/.claude/settings.json (SessionStart + UserPromptSubmit + Stop)"
+      }
+    }
+  },
+  "backends": {
+    "nexus": {
+      "label": "Nexus Memory (this repo)",
+      "default": true,
+      "mcp": {
+        "command": "python3",
+        "args": ["scripts/adapters/nexus_mcp_stdio.py"],
+        "env": {
+          "NEXUS_URL": "${NEXUS_URL:-http://100.93.75.87:7777}",
+          "NEXUS_SECRET": "${NEXUS_SECRET}",
+          "NEXUS_AGENT_ID": "${NEXUS_AGENT_ID}"
+        }
+      },
+      "tools": ["memory_recall", "memory_save", "memory_save_lesson", "memory_reflect", "memory_forget_by_query", "agent_context"],
+      "feature_notes": "Vector + lexical + graph + temporal recall, lessons, entity graph, rolling summaries."
+    },
+    "agentmemory": {
+      "label": "agentmemory (rohitg00/agentmemory, vendored alt)",
+      "default": false,
+      "select_flag": "--use-agentmemory",
+      "package": "@agentmemory/mcp",
+      "mcp": {
+        "command": "npx",
+        "args": ["-y", "@agentmemory/mcp"],
+        "env": {
+          "AGENTMEMORY_URL": "${AGENTMEMORY_URL:-http://localhost:3111}",
+          "AGENTMEMORY_SECRET": "${AGENTMEMORY_SECRET}",
+          "AGENTMEMORY_TOOLS": "${AGENTMEMORY_TOOLS:-all}"
+        }
+      },
+      "tools": ["memory_recall", "memory_save", "memory_smart_search", "memory_timeline", "memory_profile", "memory_sessions"],
+      "feature_notes": "53 tools, BM25+vector+graph hybrid search, local-first (port 3111), Apache-2.0. Run `npx @agentmemory/agentmemory` to start the server.",
+      "tools_compat": "memory_recall/memory_save/memory_save_lesson are present in both backends so the canonical rules file is portable.",
+      "repo": "https://github.com/rohitg00/agentmemory",
+      "license": "Apache-2.0",
+      "vendored_plugins": {
+        "opencode": "integrations/opencode-agentmemory/",
+        "openclaw": "openclaw-integration/extensions/agentmemory/"
+      },
+      "security_guards": {
+        "plaintext_bearer_warn": "integrations/_shared/plaintext-bearer-guard.ts (port from agentmemory)",
+        "fallback_on_error": "If NEXUS_FALLBACK_ON_ERROR=1, MCP stdio returns null instead of throwing on backend unreachable."
+      }
+    }
+  },
+  "agents": {
+    "paperclip": {
+      "label": "Paperclip AI",
+      "kind": "plugin",
+      "install_method": "plugin-api",
+      "command": "curl -X POST http://127.0.0.1:3100/api/plugins/install -H 'Content-Type: application/json' -d '{\"packageName\":\"/path/to/synapse-memory/paperclip-plugin\",\"isLocalPath\":true}'",
+      "fallback_config": "~/.config/paperclip/nexus-memory.json",
+      "package_path": "paperclip-plugin/",
+      "docs": "https://github.com/dylanmarriner/shared-memory-mcp/tree/main/paperclip-plugin"
+    },
+    "openclaw": {
+      "label": "OpenClaw",
+      "kind": "plugin",
+      "install_method": "plugin-api",
+      "command": "curl -X POST http://127.0.0.1:<port>/api/plugins/install -H 'Content-Type: application/json' -d '{\"packageName\":\"/path/to/synapse-memory/openclaw-integration/extensions/nexus-memory\",\"isLocalPath\":true}'",
+      "fallback_config": "~/.openclaw/openclaw.json + ~/.openclaw/nexus.env",
+      "package_path": "openclaw-integration/extensions/nexus-memory/",
+      "docs": "https://github.com/dylanmarriner/shared-memory-mcp/tree/main/openclaw-integration"
+    },
+    "opencode": {
+      "label": "OpenCode",
+      "kind": "plugin",
+      "install_method": "npm",
+      "command": "opencode plugin @nexus/memory --global",
+      "fallback_command": "opencode mcp add nexus-memory --url http://100.93.75.87:7777/mcp --header 'Authorization=Bearer ${NEXUS_SECRET}'",
+      "fallback_config": "~/.config/opencode/opencode.json",
+      "docs": "https://opencode.ai/docs/plugins/"
+    },
+    "claude-code": {
+      "label": "Claude Code",
+      "kind": "plugin",
+      "install_method": "plugin-cli",
+      "command": "claude plugin install /path/to/synapse-memory/integrations/plugins/claude-code",
+      "fallback_config": "~/.claude/CLAUDE.md"
+    },
+    "hermes": {
+      "label": "Hermes",
+      "kind": "plugin",
+      "install_method": "copy",
+      "command": "cp -r integrations/plugins/hermes-nexus ~/.hermes/hermes-agent/plugins/memory/nexus",
+      "fallback_env": "~/.hermes/nexus.env"
+    },
+    "claude-desktop": {
+      "label": "Claude Desktop",
+      "kind": "mcp-config",
+      "config_path": "~/.config/Claude/claude_desktop_config.json",
+      "transport": "stdio",
+      "command": "python3 /path/to/synapse-memory/scripts/adapters/nexus_mcp_stdio.py"
+    },
+    "cline": {
+      "label": "Cline",
+      "kind": "mcp-config",
+      "config_path": "~/.cline/data/settings/cline_mcp_settings.json",
+      "transport": "http"
+    },
+    "windsurf": {
+      "label": "Windsurf",
+      "kind": "mcp-config",
+      "config_path": "~/.codeium/windsurf/mcp_config.json",
+      "transport": "http"
+    },
+    "antigravity": {
+      "label": "Antigravity",
+      "kind": "mcp-config",
+      "config_path": "~/.gemini/antigravity/mcp_config.json",
+      "transport": "http"
+    },
+    "trae": {
+      "label": "Trae",
+      "kind": "mcp-config",
+      "config_path": "~/.config/Trae/User/mcp.json",
+      "transport": "http"
+    },
+    "pearai": {
+      "label": "PearAI",
+      "kind": "mcp-config",
+      "config_path": "~/.config/PearAI/User/mcp.json",
+      "transport": "http"
+    },
+    "cursor": {
+      "label": "Cursor",
+      "kind": "mcp-config",
+      "config_path": "~/.cursor/mcp.json",
+      "transport": "http"
+    },
+    "vscode": {
+      "label": "VS Code",
+      "kind": "mcp-config",
+      "config_path": "~/.vscode/mcp.json",
+      "transport": "http"
+    },
+    "vscodium": {
+      "label": "VSCodium",
+      "kind": "mcp-config",
+      "config_path": "~/.config/VSCodium/User/mcp.json",
+      "transport": "http"
+    },
+    "gemini-cli": {
+      "label": "Gemini CLI",
+      "kind": "mcp-config",
+      "config_path": "~/.gemini/settings.json",
+      "transport": "http"
+    },
+    "qwen-code": {
+      "label": "Qwen Code",
+      "kind": "mcp-config",
+      "config_path": "~/.qwen/settings.json",
+      "transport": "http"
+    },
+    "codex-cli": {
+      "label": "Codex CLI",
+      "kind": "instructions",
+      "config_path": "~/.codex/NEXUS.md"
+    },
+    "aider": {
+      "label": "Aider",
+      "kind": "instructions",
+      "config_path": "~/.aider/NEXUS.md"
+    },
+    "devin": {
+      "label": "Devin CLI",
+      "kind": "instructions",
+      "config_path": "~/.devin/NEXUS.md"
+    },
+    "goose": {
+      "label": "Goose",
+      "kind": "env",
+      "config_path": "~/.goose/nexus.env"
+    },
+    "openhands": {
+      "label": "OpenHands",
+      "kind": "env",
+      "config_path": "~/.openhands/nexus.env"
+    },
+    "swe-agent": {
+      "label": "SWE-agent",
+      "kind": "env",
+      "config_path": "~/.swe-agent/nexus.env"
+    },
+    "continue": {
+      "label": "Continue.dev",
+      "kind": "instructions",
+      "config_path": "~/.continue/NEXUS.md"
+    },
+    "zed": {
+      "label": "Zed",
+      "kind": "instructions",
+      "config_path": "~/.zed/nexus-memory.md"
+    },
+    "amp": {
+      "label": "Amp",
+      "kind": "instructions",
+      "config_path": "~/.config/amp/NEXUS.md"
+    },
+    "github-copilot": {
+      "label": "GitHub Copilot",
+      "kind": "instructions",
+      "config_path": "<repo>/.github/copilot-instructions.md"
+    }
+  },
+  "tools": [
+    "memory_save",
+    "memory_recall",
+    "memory_reflect",
+    "memory_save_lesson",
+    "memory_save_global",
+    "memory_note_to_agent",
+    "agent_context",
+    "agent_represent",
+    "agent_learn",
+    "memory_synthesize",
+    "memory_consolidate",
+    "memory_confirm",
+    "memory_contradict",
+    "memory_context_reconstruct",
+    "memory_handoff",
+    "memory_profile",
+    "memory_reflect",
+    "session_start",
+    "session_end",
+    "session_append",
+    "session_list",
+    "session_get",
+    "nexus_status"
+  ]
+}

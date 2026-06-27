@@ -1,0 +1,29 @@
+name: hermes-mind
+version: 1.0.0
+description: |
+  Living Mind integration for Hermes — the Python agent framework.
+  Injects the mind's briefing at session start and surfaces
+  context before every prompt.
+author: Nexus
+requires_env:
+  - name: NEXUS_URL
+    description: "Nexus server URL"
+    default: "http://localhost:7777"
+  - name: NEXUS_SECRET
+    description: "Nexus Bearer token"
+    secret: true
+  - name: MIND_ID
+    description: "Which mind to query"
+    default: "default"
+  - name: AGENT_ID
+    description: "Which agent is starting"
+    default: "hermes"
+hooks:
+  - event: session_start
+    handler: on_session_start
+  - event: prompt_submit
+    handler: on_prompt_submit
+  - event: session_end
+    handler: on_session_end
+skills:
+  - mind-memory

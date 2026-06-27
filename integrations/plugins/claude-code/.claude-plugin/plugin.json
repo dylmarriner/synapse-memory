@@ -1,0 +1,19 @@
+{
+  "id": "nexus-memory",
+  "name": "Nexus Memory",
+  "version": "1.0.0",
+  "description": "Unified long-term memory for Claude Code. 4-way recall (vector + lexical + graph + temporal), durable save, lessons, structured reflection. Shared across all agents and devices via Tailscale.",
+  "author": {
+    "name": "Nexus"
+  },
+  "homepage": "https://github.com/dylanmarriner/shared-memory-mcp",
+  "repository": "https://github.com/dylanmarriner/shared-memory-mcp",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "mcp",
+    "agent",
+    "long-term-memory",
+    "nexus"
+  ]
+}

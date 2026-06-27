@@ -33,6 +33,40 @@ from app.search.fusion import reciprocal_rank_fusion
 from app.search.expand import is_trivial_query, expand_query
 from app.search.rerank import rerank as rerank_results
 
+
+def _apply_adopted_filters(fused):
+    """Apply the adopted-pattern filters: expiration + decay-strength re-rank.
+
+    - `expiration_date` memories are dropped (auto-forgetting).
+    - Each result's `importance` is multiplied by a decay score from
+      `app.adopted.decay` so frequently-accessed memories float up.
+    """
+    try:
+        from app.adopted import expiration, decay
+    except ImportError:
+        return fused
+    out = []
+    for m in fused:
+        meta = getattr(m, "metadata", None) or {}
+        if expiration.is_expired({"metadata": meta} if not isinstance(meta, dict) else meta):
+            continue
+        if hasattr(m, "id"):
+            try:
+                meta_dict = dict(meta) if not isinstance(meta, dict) else meta
+                state = decay.ConnectionState(
+                    strength=float(getattr(m, "importance", 0.5) or 0.5),
+                    stability=float(meta_dict.get("stability", 30.0) or 30.0),
+                    last_activated=getattr(m, "accessed_at", None),
+                    access_count=int(getattr(m, "access_count", 0) or 0),
+                )
+                if hasattr(m, "relevance") and m.relevance is not None:
+                    m.relevance = float(m.relevance) * decay.score(state)
+            except Exception:
+                pass
+        out.append(m)
+    return out
+
+
 router = APIRouter()
 
 
@@ -44,6 +78,32 @@ async def _search_in_own_session(fn, *args):
 
 @router.post("/save", response_model=MemorySaveResponse)
 async def save(body: MemorySaveRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    # Active-memory mode: route through the Living Mind.  The mind
+    # processes the memory (entities, opinions, identity updates) and
+    # then saves it.  Set USE_ACTIVE_MEMORY=1 to enable.
+    import os
+    if os.environ.get("USE_ACTIVE_MEMORY", "").lower() in ("1", "true", "yes"):
+        try:
+            from app.mind.active import MemoryRouter
+            from app.routers.mind import _get_mind
+            mind = _get_mind("default")
+            router = MemoryRouter(mind)
+            response = await router.save(
+                content=body.content,
+                agent_id=body.agent_id,
+                memory_type=body.memory_type,
+                importance=body.importance,
+                tags=body.tags,
+            )
+            # Wrap into the standard response shape.
+            return MemorySaveResponse(
+                id=response["id"],
+                classified_type=response.get("memory_type", "observation"),
+                extraction_queued=False,
+                deduplicated=False,
+            )
+        except Exception as e:
+            log.debug("active memory save failed, falling back: %s", e)
     return await save_memory(db, request.app.state.redis, body)
 
 
@@ -67,7 +127,27 @@ async def recall(body: MemoryRecallRequest):
     Vector + lexical run first. Graph + temporal are only used when the primary
     searches are sparse, unless the caller explicitly requests only secondary
     modes.
+
+    Active-memory mode: when USE_ACTIVE_MEMORY=1, route through the
+    Living Mind which returns a *reasoned* response — the agent gets
+    the mind's answer, the memories it cited, and any proactive
+    context, instead of just a flat memory list.
     """
+    import os
+    if os.environ.get("USE_ACTIVE_MEMORY", "").lower() in ("1", "true", "yes"):
+        try:
+            from app.mind.active import MemoryRouter
+            from app.routers.mind import _get_mind
+            mind = _get_mind("default")
+            router = MemoryRouter(mind)
+            return await router.recall(
+                query=body.query,
+                agent_id=body.agent_id,
+                limit=body.limit,
+                reasoning_depth="fast",
+            )
+        except Exception as e:
+            log.debug("active memory recall failed, falling back: %s", e)
     if is_trivial_query(body.query):
         return MemoryRecallResponse(results=[], total=0, modes_used=[])
 
@@ -126,6 +206,9 @@ async def recall(body: MemoryRecallRequest):
             fused = reciprocal_rank_fusion(lists)[: body.limit]
 
     fused = await rerank_results(body.query, fused, body.limit)
+
+    # Adopted-pattern filters — expiration + decay-strength re-rank.
+    fused = _apply_adopted_filters(fused)
 
     # Honesty gate: drop weak matches so recall returns recognition, not noise.
     # When nothing clears the bar, return empty — "I don't have that" beats a guess.

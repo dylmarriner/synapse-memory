@@ -68,6 +68,12 @@ Powered by **PostgreSQL + pgvector + Redis**, Nexus provides **four parallel sea
 - Durable conclusions & preferences
 - Cross-session context persistence
 
+**🧩 Adopted Patterns** (`app/adopted/`)
+- 19 distinctive memory ideas, rewritten as Nexus-native modules
+- Ebbinghaus decay, 4-tier consolidation, temporal KG, memory blocks,
+  peer model, 12-event hooks, two-stage rerank, pluggable backend, and more
+- Pure-Python, no DB, fully tested (50+ tests)
+
 </td>
 <td width="50%">
 
@@ -197,6 +203,116 @@ Full OpenAPI spec at `/.well-known/nexus/openapi.json` when running.
 
 ## 🔌 Client Integration
 
+### 🚀 Quick install — one command, every agent
+
+The fastest way to wire Nexus into any AI agent on this machine is the
+universal installer. It auto-detects what's installed and uses each
+agent's native install path (`opencode plugin`, `claude plugin install`,
+Paperclip's `/api/plugins/install`, OpenClaw's plugin API, etc.) with
+config-file fallbacks for agents that don't have a plugin install command.
+
+```bash
+# Local (from this repo):
+scripts/nexus-install
+
+# Or via one-liner (no clone required):
+curl -fsSL https://raw.githubusercontent.com/dylanmarriner/shared-memory-mcp/main/scripts/nexus-install-remote.sh \
+  | NEXUS_URL=http://<host>:7777 NEXUS_SECRET=<secret> bash
+
+# Show what's supported + detection status:
+scripts/nexus-install --list
+
+# Install into specific agents:
+scripts/nexus-install paperclip opencode openclaw hermes
+
+# Install into everything (skip detection):
+scripts/nexus-install --all
+```
+
+By default the installer writes three things per agent:
+
+1. **Connection** — MCP server entry / plugin registration / config so the
+   agent can actually call Nexus tools.
+2. **Rules** (default on) — global instruction files (`~/.claude/CLAUDE.md`,
+   `~/.gemini/GEMINI.md`, `~/.codex/AGENTS.md`, `~/.aider/CONVENTIONS.md`,
+   etc.) that teach the agent *when* to use Nexus. Add `--no-rules` to
+   install connection only.
+3. **Skills** (opt-in: `--with-skills`) — a reusable `nexus-memory` skill
+   the LLM can discover and invoke.
+4. **Hooks** (opt-in: `--with-hooks`) — Claude Code event hooks
+   (SessionStart, UserPromptSubmit, Stop) that auto-recall before each
+   prompt and auto-save after each turn.
+
+By default, rules and skills install **globally** (in `$HOME/...`) so they
+apply to every project. Use `--local` to write them to the current
+project's working directory instead.
+
+```bash
+# Connection + global rules (default)
+scripts/nexus-install
+
+# Connection + global rules + global skills + global hooks
+scripts/nexus-install --with-skills --with-hooks
+
+# Connection + project-level rules (for the current project only)
+scripts/nexus-install --local
+
+# Connection only, no rules
+scripts/nexus-install --no-rules
+```
+
+Supports 28+ agents: Paperclip, OpenClaw, OpenCode, Claude Code, Hermes,
+Claude Desktop, Cline, Cursor, VS Code, VSCodium, Windsurf, Antigravity,
+Trae, PearAI, Gemini CLI, Qwen Code, Codex CLI, Aider, Devin CLI, Goose,
+OpenHands, SWE-agent, Continue, Zed, Amp, GitHub Copilot — and the Cline
+extension inside any VS Code-compatible IDE.
+
+### Per-agent native install paths
+
+If you'd rather use each agent's own install command directly:
+
+```bash
+# Paperclip (server-side plugin install)
+curl -X POST http://127.0.0.1:3100/api/plugins/install \
+  -H "Content-Type: application/json" \
+  -d '{"packageName":"/path/to/synapse-memory/paperclip-plugin","isLocalPath":true}'
+
+# OpenClaw (server-side plugin install)
+curl -X POST http://127.0.0.1:<openclaw-port>/api/plugins/install \
+  -H "Content-Type: application/json" \
+  -d '{"packageName":"/path/to/synapse-memory/openclaw-integration/extensions/nexus-memory","isLocalPath":true}'
+
+# OpenCode (npm plugin)
+opencode plugin @nexus/memory --global
+# Or as MCP:
+opencode mcp add nexus-memory --url http://<host>:7777/mcp --header "Authorization=Bearer <NEXUS_SECRET>"
+
+# Claude Code
+claude plugin install integrations/plugins/claude-code
+
+# Hermes (copy plugin + write env)
+cp -r integrations/plugins/hermes-nexus ~/.hermes/hermes-agent/plugins/memory/nexus
+echo 'NEXUS_URL=http://<host>:7777
+NEXUS_SECRET=<secret>
+NEXUS_AGENT_ID=hermes' > ~/.hermes/nexus.env
+```
+
+### What the installer writes
+
+| Layer | What | Where (default = global) | Flag |
+|---|---|---|---|
+| Connection | MCP server / plugin registration | per-agent native location | always |
+| Rules | "When to recall/save/reflect" guidance | `~/.claude/CLAUDE.md`, `~/.gemini/GEMINI.md`, `~/.codex/AGENTS.md`, `~/.aider/CONVENTIONS.md`, `~/.continue/NEXUS.md`, `~/.zed/AGENTS.md`, `~/.config/amp/AGENTS.md`, `~/.config/opencode/AGENTS.md`, … | default on (`--no-rules` to skip, `--local` for project) |
+| Skills | Reusable `nexus-memory` skill | `~/.claude/skills/nexus-memory/SKILL.md`, `~/.config/opencode/skills/nexus-memory/SKILL.md`, `~/.continue/config.yaml` | `--with-skills` |
+| Hooks | SessionStart + UserPromptSubmit + Stop | `~/.claude/settings.json` | `--with-hooks` |
+
+Canonical sources:
+[`integrations/rules/nexus-memory.md`](integrations/rules/nexus-memory.md)
+and
+[`integrations/skills/nexus-memory/SKILL.md`](integrations/skills/nexus-memory/SKILL.md).
+
+### Cross-computer setup (Tailscale)
+
 Use [`docs/agent-connection-tailscale.md`](docs/agent-connection-tailscale.md)
 for the full cross-computer setup guide, including Tailscale, Nexus Doctor,
 HTTP MCP, stdio MCP, REST/OpenAPI, and per-agent instructions.
@@ -208,13 +324,17 @@ scripts/nexus-doctor
 scripts/nexus-doctor --apply --nexus-url http://<tailscale-host>:7777 --secret "$NEXUS_SECRET"
 ```
 
-### Hermes Agent
+### Manual config snippets
+
+If you need to write configs by hand:
+
+**Hermes Agent**
 ```bash
 hermes mcp add nexus --url http://<host>:7777/mcp --auth header
 ```
 Then enter your `NEXUS_SECRET` as the Bearer token.
 
-### Cline / Claude Desktop
+**Cline / Claude Desktop / Cursor / VS Code / Windsurf / Antigravity**
 ```json
 {
   "mcpServers": {
@@ -225,18 +345,20 @@ Then enter your `NEXUS_SECRET` as the Bearer token.
   }
 }
 ```
-See [`integrations/mcp/`](integrations/mcp/) for ready-made config files.
 
-### OpenCode
-```bash
-opencode mcp add nexus --url http://<host>:7777/mcp --auth header
-```
+See [`integrations/mcp/`](integrations/mcp/) for ready-made config files
+and [`integrations/plugins/install-registry.json`](integrations/plugins/install-registry.json)
+for the full install registry.
 
-### Paperclip
-See [`paperclip-plugin/`](paperclip-plugin/) for the Paperclip AI plugin.
+### Plugin source trees
 
-### OpenClaw
-See [`openclaw-plugin/`](openclaw-plugin/) for the OpenClaw plugin.
+- Paperclip plugin: [`paperclip-plugin/`](paperclip-plugin/)
+- OpenClaw extension: [`openclaw-integration/extensions/nexus-memory/`](openclaw-integration/extensions/nexus-memory/)
+- OpenCode plugin (npm): [`integrations/plugins/opencode-nexus/`](integrations/plugins/opencode-nexus/)
+- Claude Code plugin: [`integrations/plugins/claude-code/`](integrations/plugins/claude-code/)
+- Hermes plugin: [`integrations/plugins/hermes-nexus/`](integrations/plugins/hermes-nexus/)
+- Canonical rules: [`integrations/rules/nexus-memory.md`](integrations/rules/nexus-memory.md)
+- Canonical skill: [`integrations/skills/nexus-memory/SKILL.md`](integrations/skills/nexus-memory/SKILL.md)
 
 ## 🐳 Deployment
 
@@ -317,6 +439,7 @@ nexus/
 ## 📚 Documentation
 
 - [Architecture Diagram](docs/architecture.html) — interactive SVG
+- [Adopted Patterns](docs/adopted/README.md) — 19 distinctive memory ideas rewritten as Nexus-native modules
 - [Integration Guide](UNIVERSAL_AGENT_INTEGRATION.md)
 - [Agent + Tailscale Connection Guide](docs/agent-connection-tailscale.md)
 - [Nexus Doctor](docs/nexus-doctor.md)

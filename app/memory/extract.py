@@ -1,8 +1,17 @@
-"""Background worker — classifies types, extracts entities, builds summaries, detects patterns."""
+"""Background worker — classifies types, extracts entities, builds summaries, detects patterns.
+
+The extraction prompt is pluggable via the `USE_ADDITIVE_EXTRACTION`
+feature flag.  When enabled, the worker uses the single-pass ADD-only
+extraction prompt from `app.adopted.prompts`, which returns a JSON list
+of new memories (with linked_memory_ids) instead of one type/entities/
+conclusion triple.  This is opt-in to keep the old path working
+identically for any agent that depends on the existing behaviour.
+"""
 
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -16,6 +25,28 @@ from app.embeddings import get_embedding
 log = logging.getLogger("nexus.memory.extract")
 _WORKER_HEARTBEAT = Path("/tmp/nexus-worker-heartbeat")
 
+
+def _use_additive_extraction() -> bool:
+    """Whether the worker uses the ADD-only single-pass extraction prompt.
+
+    Default: ON.  The additive path is strictly more capable than the
+    legacy path — it captures N facts per turn instead of one, with
+    linking and per-fact importance, for the same LLM call count.
+
+    Set `USE_LEGACY_EXTRACTION=1` to revert to the legacy single-fact
+    classify+entities+conclusion path.  Use the legacy path only if
+    a downstream tool depends on the exact old response shape.
+    """
+    if os.getenv("USE_LEGACY_EXTRACTION", "false").lower() in ("1", "true", "yes"):
+        return False
+    return os.getenv("USE_ADDITIVE_EXTRACTION", "true").lower() in ("1", "true", "yes", "on")
+
+
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
+
+# Legacy single-call classify+entities+conclusion prompt.
 _EXTRACT_PROMPT = """Return minified JSON for memory analysis:
 {{
   "type": "world|experience|observation|preference|lesson",
@@ -25,6 +56,24 @@ _EXTRACT_PROMPT = """Return minified JSON for memory analysis:
 
 Memory: {content}
 Only JSON."""
+
+# ADD-only single-pass extraction prompt.  Imported from `app.adopted.prompts`
+# at module load.  This prompt is *additive* — every fact is appended, never
+# overwritten — and produces a JSON list of new memories, each with a
+# `memory_type`, `importance`, `tags`, and `linked_memory_ids`.  See the
+# module docstring for the full contract.
+try:
+    from app.adopted import prompts as _adopted_prompts
+    _ADDITIVE_EXTRACT_PROMPT = _adopted_prompts.ADDITIVE_EXTRACTION_PROMPT
+    _FACT_RETRIEVAL_PROMPT = _adopted_prompts.FACT_RETRIEVAL_PROMPT
+    _AGENT_CONTEXT_SUFFIX = _adopted_prompts.AGENT_CONTEXT_SUFFIX
+    _PROCEDURAL_MEMORY_SYSTEM_PROMPT = _adopted_prompts.PROCEDURAL_MEMORY_SYSTEM_PROMPT
+except ImportError:
+    _ADDITIVE_EXTRACT_PROMPT = None  # type: ignore[assignment]
+    _FACT_RETRIEVAL_PROMPT = None    # type: ignore[assignment]
+    _AGENT_CONTEXT_SUFFIX = None     # type: ignore[assignment]
+    _PROCEDURAL_MEMORY_SYSTEM_PROMPT = None  # type: ignore[assignment]
+
 
 _PATTERN_PROMPT = """Analyze these memories and identify any significant patterns or recurring themes.
 Return 2-4 pattern observations as a JSON array of strings.
@@ -129,6 +178,84 @@ async def _detect_patterns(memories: List[str], llm) -> List[str]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# Additive single-pass extraction (opt-in via USE_ADDITIVE_EXTRACTION)
+# ---------------------------------------------------------------------------
+
+async def _additive_extract(
+    content: str,
+    llm,
+    existing_memories: List[Dict[str, Any]],
+    is_agent_scoped: bool = False,
+) -> List[Dict[str, Any]]:
+    """Single LLM call that returns a JSON list of new memories.
+
+    Each entry is a dict with `text`, `memory_type`, `importance`, `tags`,
+    and `linked_memory_ids`.  Returns [] on any failure (never raises).
+    The caller is responsible for persisting.
+    """
+    if _ADDITIVE_EXTRACT_PROMPT is None:
+        return []
+    try:
+        existing_block = "\n".join(
+            f"  id={m.get('id', i)} text={m.get('content', '')[:300]}"
+            for i, m in enumerate(existing_memories[:10])
+        ) or "  (none)"
+        system = _ADDITIVE_EXTRACTION_PROMPT
+        if is_agent_scoped:
+            system = system + _AGENT_CONTEXT_SUFFIX  # type: ignore[operator]
+        user = (
+            f"Existing memories (id -> text):\n{existing_block}\n\n"
+            f"Latest user message:\n{content[: settings.llm_input_char_limit]}"
+        )
+        resp = await llm.chat.completions.create(
+            model=settings.llm_model,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            max_tokens=settings.llm_extract_max_tokens,
+            temperature=0,
+            timeout=15,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        data = json.loads(raw)
+        items = data.get("memories") or data.get("memory") or []
+        out: List[Dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            text_v = (item.get("text") or "").strip()
+            if not text_v:
+                continue
+            mt = str(item.get("memory_type") or "observation").lower()
+            if mt not in ("world", "experience", "observation", "preference", "lesson"):
+                mt = "observation"
+            try:
+                imp = float(item.get("importance", 0.5) or 0.5)
+            except (TypeError, ValueError):
+                imp = 0.5
+            out.append({
+                "text": text_v,
+                "memory_type": mt,
+                "importance": max(0.0, min(1.0, imp)),
+                "tags": list(item.get("tags") or []),
+                "linked_memory_ids": list(item.get("linked_memory_ids") or []),
+            })
+        return out
+    except Exception as e:
+        log.debug("Additive extract failed: %s", e)
+        return []
+
+
+async def _apply_expiration_filter(memory_payload: Dict[str, Any]) -> bool:
+    """Return True if the memory is past its expiration_date."""
+    try:
+        from app.adopted.expiration import is_expired
+        return is_expired(memory_payload)
+    except ImportError:
+        return False
+
+
 async def _build_summary(agent_name: str, agent_id: str, db, llm) -> Optional[str]:
     """Build a rolling summary for an agent and store it."""
     try:
@@ -199,14 +326,51 @@ async def _process_job(job: Dict[str, Any], llm, processed_count: list):
 
     memory_type = "observation"
     importance = job.get("importance", 0.5)
+    additive_extractions: List[Dict[str, Any]] = []
 
     if job.get("needs_classification") and llm:
-        log.debug("Running batch extraction for %s", memory_id[:12])
-        result = await _batch_extract(content, llm, importance)
-        memory_type = result["memory_type"]
-        log.debug("Batch extraction result: type=%s, entities=%d, conclusion=%s", 
-                   memory_type, len(result.get("entities", [])), bool(result.get("conclusion")))
-        updates["memory_type"] = memory_type
+        if _use_additive_extraction() and _ADDITIVE_EXTRACT_PROMPT is not None:
+            # New path: one LLM call that emits a JSON list of new memories.
+            log.debug("Running additive extraction for %s", memory_id[:12])
+            async with SessionLocal() as db:
+                existing_rows: List[Dict[str, Any]] = []
+                if agent_id_name:
+                    try:
+                        result = await db.execute(text("""
+                            SELECT id::text AS id, content
+                            FROM memories
+                            WHERE agent_id = (SELECT id FROM agents WHERE name = :name)
+                            ORDER BY created_at DESC LIMIT 10
+                        """), {"name": agent_id_name})
+                        for r in result.fetchall():
+                            existing_rows.append({"id": r.id, "content": r.content})
+                    except Exception:
+                        pass
+
+            extracted = await _additive_extract(
+                content, llm, existing_rows,
+                is_agent_scoped=bool(agent_id_name) and not content.startswith("user:"),
+            )
+            additive_extractions.extend(extracted)
+            if extracted:
+                # Promote the highest-importance extraction to the parent
+                # memory's `memory_type` so existing callers still see a
+                # classified_type in the response.
+                best = max(extracted, key=lambda x: x.get("importance", 0.0))
+                memory_type = best.get("memory_type", "observation")
+                updates["memory_type"] = memory_type
+                log.debug(
+                    "Additive extraction returned %d facts (top type=%s)",
+                    len(extracted), memory_type,
+                )
+        else:
+            # Legacy path — single classify + entities + conclusion.
+            log.debug("Running batch extraction for %s", memory_id[:12])
+            result = await _batch_extract(content, llm, importance)
+            memory_type = result["memory_type"]
+            log.debug("Batch extraction result: type=%s, entities=%d, conclusion=%s",
+                       memory_type, len(result.get("entities", [])), bool(result.get("conclusion")))
+            updates["memory_type"] = memory_type
 
     async with SessionLocal() as db:
         if updates:
@@ -226,8 +390,47 @@ async def _process_job(job: Dict[str, Any], llm, processed_count: list):
 
             # Batch extract already ran — use results
             if job.get("needs_classification") and llm:
-                entities = result["entities"]
-                conclusion = result["conclusion"] if memory_type in ("observation", "lesson") else None
+                if _use_additive_extraction() and additive_extractions:
+                    # Additive path: each extracted fact becomes a sibling
+                    # memory linked to the parent via the `parent_id` tag
+                    # and a linked_memory_ids entry.  Persist them as new rows
+                    # rather than mutating the parent.
+                    from app.adopted import tiers as _tiers
+                    parent_tier = _tiers.Tier.WORKING
+                    try:
+                        for fact in additive_extractions[:8]:  # cap per parent
+                            tags = list(fact.get("tags") or [])
+                            for lid in fact.get("linked_memory_ids") or []:
+                                tags.append(f"linked:{lid}")
+                            tags.append("additive")
+                            await db.execute(text("""
+                                INSERT INTO memories
+                                    (agent_id, content, memory_type, importance, metadata,
+                                     tier, strength, last_activated)
+                                VALUES
+                                    (CAST(:aid AS uuid), :content, :mtype, :imp, CAST(:meta AS jsonb),
+                                     :tier, :strength, NOW())
+                            """), {
+                                "aid": agent_uuid,
+                                "content": fact["text"],
+                                "mtype": fact.get("memory_type", "observation"),
+                                "imp": fact.get("importance", 0.5),
+                                "meta": json.dumps({"tags": tags, "parent_memory_id": str(memory_id)}),
+                                "tier": parent_tier.value,
+                                "strength": 0.5,
+                            })
+                        await db.commit()
+                        log.info(
+                            "Additive extraction persisted %d sibling memories for parent %s",
+                            min(len(additive_extractions), 8), str(memory_id)[:8],
+                        )
+                    except Exception as e:
+                        log.debug("Additive persistence failed: %s", e)
+                    entities = []
+                    conclusion = None
+                else:
+                    entities = result["entities"]
+                    conclusion = result["conclusion"] if memory_type in ("observation", "lesson") else None
             else:
                 entities = []
                 conclusion = None

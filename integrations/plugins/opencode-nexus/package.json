@@ -1,0 +1,39 @@
+{
+  "name": "@nexus/memory",
+  "version": "1.0.0",
+  "description": "Nexus Memory plugin for OpenCode — unified long-term memory via vector + lexical + graph + temporal recall",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "nexus",
+    "memory",
+    "mcp",
+    "agent",
+    "ai"
+  ],
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "opencode": ">=1.0.0"
+  },
+  "opencode": {
+    "kind": "memory",
+    "id": "nexus-memory"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@opencode-ai/plugin": ">=1.0.0",
+    "typescript": "^5.5.0"
+  }
+}

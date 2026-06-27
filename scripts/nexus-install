@@ -1,0 +1,1785 @@
+#!/usr/bin/env python3
+"""Nexus Install — one command, every agent.
+
+Auto-detect which AI agents/IDEs are installed locally and connect them to
+Nexus using each agent's native install path where possible (plugin install
+API, npm install, etc.) and config-file writes where no install command
+exists (most VS Code-style extensions).
+
+Usage:
+  scripts/nexus-install                      # detect & install into all
+  scripts/nexus-install --list               # show supported agents + status
+  scripts/nexus-install paperclip            # install into one agent
+  scripts/nexus-install paperclip opencode    # install into several
+  scripts/nexus-install --all                # install into every detected
+  scripts/nexus-install --dry-run            # show what would happen
+
+Environment:
+  NEXUS_URL      Nexus base URL (default: http://100.93.75.87:7777)
+  NEXUS_SECRET   Bearer secret for Nexus
+
+The installer never deletes config. Every change is backed up with a
+.nexus-backup-<timestamp> suffix.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, Optional
+
+
+ROOT = Path(__file__).resolve().parents[1]
+HOME = Path.home()
+TS = time.strftime("%Y%m%d-%H%M%S")
+
+DEFAULT_NEXUS_URL = "http://100.93.75.87:7777"
+NEXUS_DEFAULT_SECRET_PLACEHOLDER = "${NEXUS_SECRET}"
+
+
+# ── Output helpers ─────────────────────────────────────────────────────────
+
+class C:
+    R = "\033[0m"
+    DIM = "\033[2m"
+    B = "\033[1m"
+    RED = "\033[31m"
+    GRN = "\033[32m"
+    YEL = "\033[33m"
+    BLU = "\033[34m"
+    CYN = "\033[36m"
+    MG = "\033[35m"
+
+    @classmethod
+    def enable(cls, on: bool) -> None:
+        if not on:
+            for k in ("R", "DIM", "B", "RED", "GRN", "YEL", "BLU", "CYN", "MG"):
+                setattr(cls, k, "")
+
+
+def info(msg: str) -> None:
+    print(f"{C.CYN}==>{C.R} {msg}")
+
+
+def ok(msg: str) -> None:
+    print(f"{C.GRN} ✓ {C.R} {msg}")
+
+
+def warn(msg: str) -> None:
+    print(f"{C.YEL} ! {C.R} {msg}")
+
+
+def err(msg: str) -> None:
+    print(f"{C.RED} ✗ {C.R} {msg}", file=sys.stderr)
+
+
+def dim(msg: str) -> None:
+    print(f"{C.DIM}   {msg}{C.R}")
+
+
+# ── Backup / IO helpers ────────────────────────────────────────────────────
+
+def backup(path: Path) -> Optional[Path]:
+    if not path.exists():
+        return None
+    if path.is_dir():
+        target = path.with_name(path.name + f".nexus-backup-{TS}")
+        shutil.copytree(path, target)
+        return target
+    target = path.with_suffix(path.suffix + f".nexus-backup-{TS}")
+    shutil.copy2(path, target)
+    return target
+
+
+def write_json(path: Path, data: dict, *, merge: bool = True) -> bool:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if merge and path.exists():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            existing = {}
+        if not isinstance(existing, dict):
+            existing = {}
+        existing = deep_merge(existing, data)
+        data = existing
+    backup(path)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return True
+
+
+def deep_merge(a: dict, b: dict) -> dict:
+    out = dict(a)
+    for k, v in b.items():
+        if k in out and isinstance(out[k], dict) and isinstance(v, dict):
+            out[k] = deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def shell(cmd: list[str], timeout: int = 30) -> tuple[int, str, str]:
+    try:
+        p = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout, check=False
+        )
+        return p.returncode, p.stdout.strip(), p.stderr.strip()
+    except FileNotFoundError:
+        return 127, "", f"command not found: {cmd[0]}"
+    except subprocess.TimeoutExpired:
+        return 124, "", "timeout"
+    except Exception as e:
+        return 1, "", str(e)
+
+
+def http_post_json(url: str, body: dict, headers: Optional[dict] = None,
+                   timeout: int = 15) -> tuple[int, dict | str, str]:
+    data = json.dumps(body).encode()
+    h = {"Content-Type": "application/json", **(headers or {})}
+    req = urllib.request.Request(url, data=data, headers=h, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+            try:
+                return r.status, json.loads(raw), ""
+            except Exception:
+                return r.status, raw.decode("utf-8", "replace"), ""
+    except urllib.error.HTTPError as e:
+        body_text = ""
+        try:
+            body_text = e.read().decode("utf-8", "replace")
+        except Exception:
+            pass
+        return e.code, body_text, body_text
+    except Exception as e:
+        return 0, "", str(e)
+
+
+# ── Agent registry ─────────────────────────────────────────────────────────
+
+RULES_PATH = ROOT / "integrations" / "rules" / "nexus-memory.md"
+SKILL_PATH = ROOT / "integrations" / "skills" / "nexus-memory" / "SKILL.md"
+
+
+def _read_rules() -> str:
+    return RULES_PATH.read_text(encoding="utf-8") if RULES_PATH.exists() else ""
+
+
+def _read_skill() -> str:
+    return SKILL_PATH.read_text(encoding="utf-8") if SKILL_PATH.exists() else ""
+
+
+def _read_skill_frontmatter() -> dict:
+    if not SKILL_PATH.exists():
+        return {}
+    text = SKILL_PATH.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        return {}
+    try:
+        end = text.index("---", 3)
+        fm = text[3:end].strip()
+        # very small YAML-ish parser — we control the format
+        out: dict = {}
+        for line in fm.splitlines():
+            line = line.rstrip()
+            if not line or ":" not in line:
+                continue
+            k, _, v = line.partition(":")
+            v = v.strip()
+            if v.startswith('"') and v.endswith('"'):
+                v = v[1:-1]
+            out[k.strip()] = v
+        return out
+    except Exception:
+        return {}
+
+
+def append_rule_block(path: Path, block_header: str = "## Nexus Memory") -> bool:
+    """Append a Nexus Memory section to a markdown rules/instructions file."""
+    rules_text = _read_rules()
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        backup(path)
+        # If rules_text already starts with the block_header, don't double it
+        if rules_text.lstrip().startswith(block_header):
+            path.write_text(f"# {path.stem}\n\n{rules_text}", encoding="utf-8")
+        else:
+            path.write_text(f"# {path.stem}\n\n{block_header}\n\n{rules_text}", encoding="utf-8")
+        return True
+    text = path.read_text(encoding="utf-8")
+    # Detect canonical rules already installed (look for canonical signature)
+    if "memory_recall(query=" in text and "memory_save_lesson" in text:
+        return False  # already installed (canonical signature present)
+    backup(path)
+    if text and not text.endswith("\n"):
+        text += "\n"
+    # Strip any partial/minimal Nexus Memory section (header only with no body)
+    if block_header in text and "memory_recall(query=" not in text:
+        # remove just the header line, keep the rest
+        lines = text.splitlines()
+        kept = [l for l in lines if l.strip() != block_header]
+        text = "\n".join(kept).rstrip() + "\n"
+    if rules_text.lstrip().startswith(block_header):
+        path.write_text(text + "\n" + rules_text, encoding="utf-8")
+    else:
+        path.write_text(text + "\n" + block_header + "\n\n" + rules_text, encoding="utf-8")
+    return True
+
+
+@dataclass
+class AgentDef:
+    name: str
+    description: str
+    category: str  # "plugin" | "mcp-config" | "env" | "instructions"
+    install_kind: str  # "plugin-api" | "npm" | "mcp-http" | "mcp-stdio" | "config" | "shell" | "copy"
+    detect: Callable[[], bool]
+    install: Callable[[], InstallResult]
+    docs_url: str = ""
+    enabled_by_default: bool = True
+    # Optional: per-agent rules writer (project-level instructions)
+    install_rules: Optional[Callable[[], InstallResult]] = None
+    # Optional: per-agent skills writer (skill definition)
+    install_skill: Optional[Callable[[], InstallResult]] = None
+    # Optional: per-agent hooks writer (event handlers)
+    install_hooks: Optional[Callable[[], InstallResult]] = None
+    # Whether rules should be installed by default for this agent
+    rules_default: bool = True
+
+
+@dataclass
+class InstallResult:
+    success: bool
+    message: str
+    detail: str = ""
+    changed_paths: list[str] = field(default_factory=list)
+
+
+# ── HTTP / MCP snippets ────────────────────────────────────────────────────
+
+def mcp_http_block(url: str, secret: str) -> dict:
+    return {
+        "url": f"{url.rstrip('/')}/mcp",
+        "headers": {"Authorization": f"Bearer {secret}"},
+    }
+
+
+def mcp_stdio_block(url: str, secret: str, agent_id: str) -> dict:
+    # Honor --use-agentmemory: wire @agentmemory/mcp instead of Nexus.
+    # Both expose the same `memory_recall` / `memory_save` /
+    # `memory_smart_search` / `memory_save_lesson` tool surface so
+    # the global rules file is portable between backends.
+    if os.environ.get("NEXUS_USE_AGENTMEMORY") == "1":
+        return {
+            "command": "npx",
+            "args": ["-y", "@agentmemory/mcp"],
+            "env": {
+                "AGENTMEMORY_URL": url.rstrip("/"),
+                "AGENTMEMORY_SECRET": secret,
+                "AGENTMEMORY_TOOLS": "all",
+            },
+        }
+    return {
+        "command": "python3",
+        "args": [str(ROOT / "scripts" / "adapters" / "nexus_mcp_stdio.py")],
+        "env": {
+            "NEXUS_URL": url.rstrip("/"),
+            "NEXUS_SECRET": secret,
+            "NEXUS_AGENT_ID": agent_id,
+        },
+        "disabled": False,
+    }
+
+
+def mcp_block_for_backend(use_agentmemory: bool, url: str, secret: str, agent_id: str) -> dict:
+    """Return MCP server entry for the chosen backend.
+
+    Default backend: Nexus (this repo, `nexus_mcp_stdio.py`).
+    Optional: `@agentmemory/mcp` (npm) — wired when `--use-agentmemory`
+    is passed. agentmemory uses the same memory_save / memory_recall /
+    memory_smart_search tool names so the rules file is portable
+    between backends.
+    """
+    if use_agentmemory:
+        return {
+            "command": "npx",
+            "args": ["-y", "@agentmemory/mcp"],
+            "env": {
+                "AGENTMEMORY_URL": url.rstrip("/"),
+                "AGENTMEMORY_SECRET": secret,
+                "AGENTMEMORY_TOOLS": "all",
+            },
+        }
+    return mcp_stdio_block(url, secret, agent_id)
+
+
+def mcp_stdio_block_with_fallback(url: str, secret: str, agent_id: str) -> dict:
+    """MCP block with explicit soft-fail behavior, ported from agentmemory.
+
+    The `fallback_on_error` pattern (origin: rohitg00/agentmemory, Apache-2.0)
+    tells agents that prefer resilience over strictness: if the memory
+    backend is unreachable, continue without it rather than crash the
+    agent run.
+    """
+    return {
+        "command": "python3",
+        "args": [str(ROOT / "scripts" / "adapters" / "nexus_mcp_stdio.py")],
+        "env": {
+            "NEXUS_URL": url.rstrip("/"),
+            "NEXUS_SECRET": secret,
+            "NEXUS_AGENT_ID": agent_id,
+            "NEXUS_FALLBACK_ON_ERROR": "1",
+        },
+        "disabled": False,
+        "metadata": {
+            "nexus": {
+                "fallback_on_error": True,
+                "port": str(ROOT / "scripts" / "adapters" / "nexus_mcp_stdio.py"),
+            }
+        },
+    }
+
+
+# ── Per-agent installers ──────────────────────────────────────────────────
+
+def get_nexus_env() -> tuple[str, str]:
+    url = os.environ.get("NEXUS_URL") or DEFAULT_NEXUS_URL
+    secret = os.environ.get("NEXUS_SECRET") or NEXUS_DEFAULT_SECRET_PLACEHOLDER
+    return url, secret
+
+
+# Paperclip — uses /api/plugins/install with package path
+def install_paperclip() -> InstallResult:
+    url, secret = get_nexus_env()
+    package_path = str(ROOT / "paperclip-plugin")
+    paperclip_api = "http://127.0.0.1:3100/api/plugins/install"
+
+    # Try the local API endpoint first
+    code, body, _ = http_post_json(
+        paperclip_api,
+        {"packageName": package_path, "isLocalPath": True},
+        timeout=20,
+    )
+
+    if code in (200, 201):
+        return InstallResult(True, "Installed via Paperclip plugin API",
+                             detail=str(body)[:200])
+
+    # Fallback: write a config file the Paperclip plugin loader will pick up
+    target = HOME / ".config" / "paperclip" / "nexus-memory.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "pluginId": "nexus-memory",
+        "packageName": package_path,
+        "isLocalPath": True,
+        "instanceConfig": {
+            "nexusUrl": url,
+            "nexusSecret": secret,
+            "agentIdPrefix": "paperclip",
+            "defaultLimit": 8,
+        },
+    }
+    backup(target)
+    target.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    detail = (
+        f"Paperclip API returned {code}; wrote config to {target}. "
+        "Run the Paperclip UI to confirm activation, or ensure the gateway is running."
+    )
+    return InstallResult(code in (200, 201) or code == 0,
+                         "Installed via Paperclip config (API fallback)",
+                         detail=detail, changed_paths=[str(target)])
+
+
+# OpenClaw — uses openclaw plugin install API
+def install_openclaw() -> InstallResult:
+    url, secret = get_nexus_env()
+    package_path = str(ROOT / "openclaw-integration" / "extensions" / "nexus-memory")
+
+    # Try the OpenClaw install API (port varies)
+    for port in (3110, 3210, 18789, 8888):
+        api = f"http://127.0.0.1:{port}/api/plugins/install"
+        code, body, errtxt = http_post_json(
+            api,
+            {"packageName": package_path, "isLocalPath": True},
+            timeout=8,
+        )
+        if code in (200, 201):
+            return InstallResult(True, f"Installed via OpenClaw API on :{port}",
+                                 detail=str(body)[:200])
+
+    # Fallback: write env + update config.json + copy extension
+    env_target = HOME / ".openclaw" / "nexus.env"
+    env_target.parent.mkdir(parents=True, exist_ok=True)
+    backup(env_target)
+    env_target.write_text(
+        f"NEXUS_URL={url}\nNEXUS_SECRET={secret}\nNEXUS_AGENT_ID=openclaw\n",
+        encoding="utf-8",
+    )
+
+    config_target = HOME / ".openclaw" / "openclaw.json"
+    if config_target.exists():
+        try:
+            cfg = json.loads(config_target.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+        cfg.setdefault("plugins", {}).setdefault("entries", {})["nexus-memory"] = {
+            "enabled": True,
+            "config": {
+                "nexusUrl": url,
+                "nexusSecret": secret,
+                "agentId": "openclaw",
+                "autoCapture": True,
+                "autoRecall": True,
+            },
+        }
+        slots = cfg.get("slots", {})
+        if isinstance(slots, dict) and slots.get("memory"):
+            slots["memory"] = "nexus-memory"
+        backup(config_target)
+        config_target.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+        return InstallResult(True, "Wrote OpenClaw config (API fallback)",
+                             detail=f"env + openclaw.json updated; env={env_target}, config={config_target}",
+                             changed_paths=[str(env_target), str(config_target)])
+
+    return InstallResult(True, "Wrote OpenClaw env file (no openclaw.json present)",
+                         detail=f"Created {env_target}; OpenClaw gateway not detected on common ports.",
+                         changed_paths=[str(env_target)])
+
+
+# OpenCode — uses opencode plugin install (npm) or opencode mcp add
+def install_opencode() -> InstallResult:
+    url, secret = get_nexus_env()
+
+    # Best path: opencode plugin install (npm-style module)
+    if shutil.which("opencode"):
+        code, out, errtxt = shell(["opencode", "plugin", "@nexus/memory", "--global"], timeout=30)
+        if code == 0:
+            return InstallResult(True, "Installed @nexus/memory via opencode plugin install",
+                                 detail=out[:200])
+
+    # Second-best: opencode mcp add
+    if shutil.which("opencode"):
+        code, out, errtxt = shell(
+            [
+                "opencode", "mcp", "add", "nexus-memory",
+                "--url", f"{url.rstrip('/')}/mcp",
+                "--header", f"Authorization=Bearer {secret}",
+            ],
+            timeout=30,
+        )
+        if code == 0:
+            return InstallResult(True, "Registered nexus-memory via opencode mcp add",
+                                 detail=out[:200])
+
+    # Fallback: write config file directly
+    config_path = HOME / ".config" / "opencode" / "opencode.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    if config_path.exists():
+        try:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+    else:
+        cfg = {}
+    mcp = cfg.get("mcp") if isinstance(cfg.get("mcp"), dict) else {}
+    mcp["nexus-memory"] = {
+        "type": "remote",
+        "url": f"{url.rstrip('/')}/mcp",
+        "headers": {"Authorization": f"Bearer {secret}"},
+    }
+    cfg["mcp"] = mcp
+    backup(config_path)
+    config_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    return InstallResult(True, "Wrote opencode.json (CLI fallback)",
+                         detail=f"Added nexus-memory MCP server to {config_path}",
+                         changed_paths=[str(config_path)])
+
+
+# Claude Code — uses `claude plugin install <package>`
+def install_claude_code() -> InstallResult:
+    url, secret = get_nexus_env()
+    package_path = str(ROOT / "integrations" / "plugins" / "claude-code")
+
+    if shutil.which("claude"):
+        code, out, errtxt = shell(["claude", "plugin", "install", package_path], timeout=30)
+        if code == 0:
+            return InstallResult(True, "Installed via `claude plugin install`",
+                                 detail=out[:200])
+
+    # Fallback: the rules writer will populate CLAUDE.md — connection alone
+    # doesn't need to touch it. Tell the user the plugin is loaded but they
+    # should run again with --with-rules to populate the rules file.
+    return InstallResult(
+        True,
+        "Claude CLI not found — connection via MCP. Run with --with-rules to populate CLAUDE.md.",
+        detail="Install Claude Code or set `claude` on PATH for full plugin install.",
+        changed_paths=[],
+    )
+
+
+# Claude Desktop — writes claude_desktop_config.json
+def install_claude_desktop() -> InstallResult:
+    url, secret = get_nexus_env()
+    target = HOME / ".config" / "Claude" / "claude_desktop_config.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    cfg: dict = {}
+    if target.exists():
+        try:
+            cfg = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+    servers = cfg.get("mcpServers") if isinstance(cfg.get("mcpServers"), dict) else {}
+    servers["nexus-memory"] = mcp_stdio_block(url, secret, "claude-desktop")
+    cfg["mcpServers"] = servers
+    backup(target)
+    target.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    return InstallResult(True, "Wrote Claude Desktop MCP config",
+                         detail=f"Added nexus-memory to {target}",
+                         changed_paths=[str(target)])
+
+
+# Hermes — copies Python plugin into ~/.hermes/.../plugins/memory/nexus/
+def install_hermes() -> InstallResult:
+    url, secret = get_nexus_env()
+    src = ROOT / "integrations" / "plugins" / "hermes-nexus"
+    dest = HOME / ".hermes" / "hermes-agent" / "plugins" / "memory" / "nexus"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        backup(dest)
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(src, dest)
+
+    # Update config.yaml
+    cfg_path = HOME / ".hermes" / "config.yaml"
+    if cfg_path.exists():
+        try:
+            text = cfg_path.read_text(encoding="utf-8")
+        except Exception:
+            text = ""
+        if "provider: nexus" not in text:
+            text = text.replace("provider: agentmemory", "provider: nexus")
+        if "NEXUS_URL" not in text:
+            text += f"\nnexus:\n  url: {url}\n  secret: {secret}\n  agent_id: hermes\n"
+        backup(cfg_path)
+        cfg_path.write_text(text, encoding="utf-8")
+
+    # Write env file
+    env_path = HOME / ".hermes" / "nexus.env"
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    backup(env_path)
+    env_path.write_text(
+        f"NEXUS_URL={url}\nNEXUS_SECRET={secret}\nNEXUS_AGENT_ID=hermes\n",
+        encoding="utf-8",
+    )
+    return InstallResult(True, "Installed Hermes Python plugin",
+                         detail=f"Copied to {dest}; env at {env_path}",
+                         changed_paths=[str(dest), str(env_path)])
+
+
+# Cline — writes cline_mcp_settings.json (or its variation per IDE)
+def install_cline_global() -> InstallResult:
+    url, secret = get_nexus_env()
+    target = HOME / ".cline" / "data" / "settings" / "cline_mcp_settings.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        try:
+            cfg = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+    else:
+        cfg = {}
+    servers = cfg.get("mcpServers") if isinstance(cfg.get("mcpServers"), dict) else {}
+    servers["nexus"] = mcp_http_block(url, secret)
+    cfg["mcpServers"] = servers
+    backup(target)
+    target.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    return InstallResult(True, "Wrote Cline MCP config",
+                         detail=f"Added nexus to {target}",
+                         changed_paths=[str(target)])
+
+
+# Generic VS Code-compatible extension installer (Cline, Roo, Kilo, Kade in any VS Code-like IDE)
+def install_vscode_like(app_dir: str, ext_id: str, settings_rel: str, agent_name: str) -> InstallResult:
+    url, secret = get_nexus_env()
+    target = HOME / ".config" / app_dir / "User" / "globalStorage" / ext_id / settings_rel
+    if not target.parent.exists():
+        return InstallResult(False, f"{agent_name} extension not installed",
+                             detail=f"Missing {target.parent}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        try:
+            cfg = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+    else:
+        cfg = {}
+    servers = cfg.get("mcpServers") if isinstance(cfg.get("mcpServers"), dict) else {}
+    servers["nexus"] = mcp_http_block(url, secret)
+    cfg["mcpServers"] = servers
+    backup(target)
+    target.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    return InstallResult(True, f"Wrote {agent_name} MCP config",
+                         detail=f"Added nexus to {target}",
+                         changed_paths=[str(target)])
+
+
+# IDE global MCP configs
+def install_ide_mcp(app_dir: str, file_rel: str, agent_name: str, kind: str = "mcpServers") -> InstallResult:
+    url, secret = get_nexus_env()
+    target = HOME / ".config" / app_dir / file_rel
+    if not target.parent.exists():
+        return InstallResult(False, f"{agent_name} not installed",
+                             detail=f"Missing {target.parent}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        try:
+            cfg = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+    else:
+        cfg = {}
+    block_key = kind
+    servers = cfg.get(block_key) if isinstance(cfg.get(block_key), dict) else {}
+    servers["nexus"] = mcp_http_block(url, secret)
+    cfg[block_key] = servers
+    backup(target)
+    target.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    return InstallResult(True, f"Wrote {agent_name} MCP config",
+                         detail=f"Added nexus to {target}",
+                         changed_paths=[str(target)])
+
+
+# Cursor / VS Code / VSCodium
+def install_cursor() -> InstallResult:
+    url, secret = get_nexus_env()
+    target = HOME / ".cursor" / "mcp.json"
+    if not target.parent.exists():
+        return InstallResult(False, "Cursor not installed", detail=f"Missing {target.parent}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        try:
+            cfg = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+    else:
+        cfg = {}
+    servers = cfg.get("mcpServers") if isinstance(cfg.get("mcpServers"), dict) else {}
+    servers["nexus"] = mcp_http_block(url, secret)
+    cfg["mcpServers"] = servers
+    backup(target)
+    target.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    return InstallResult(True, "Wrote Cursor MCP config",
+                         detail=f"Added nexus to {target}",
+                         changed_paths=[str(target)])
+
+
+def install_vscode() -> InstallResult:
+    return install_ide_mcp("Code", "User/mcp.json", "VS Code", kind="servers")
+
+
+def install_vscodium() -> InstallResult:
+    return install_ide_mcp("VSCodium", "User/mcp.json", "VSCodium", kind="servers")
+
+
+# Windsurf / Antigravity / Trae / PearAI — have IDE-global mcp_config.json
+def install_windsurf() -> InstallResult:
+    url, secret = get_nexus_env()
+    target = HOME / ".codeium" / "windsurf" / "mcp_config.json"
+    if not target.parent.exists():
+        return InstallResult(False, "Windsurf not installed", detail=f"Missing {target.parent}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        try:
+            cfg = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+    else:
+        cfg = {}
+    servers = cfg.get("mcpServers") if isinstance(cfg.get("mcpServers"), dict) else {}
+    servers["nexus"] = mcp_http_block(url, secret)
+    cfg["mcpServers"] = servers
+    backup(target)
+    target.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    return InstallResult(True, "Wrote Windsurf MCP config",
+                         detail=f"Added nexus to {target}",
+                         changed_paths=[str(target)])
+
+
+def install_antigravity() -> InstallResult:
+    url, secret = get_nexus_env()
+    target = HOME / ".gemini" / "antigravity" / "mcp_config.json"
+    if not target.parent.exists():
+        return InstallResult(False, "Antigravity not installed", detail=f"Missing {target.parent}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        try:
+            cfg = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+    else:
+        cfg = {}
+    servers = cfg.get("mcpServers") if isinstance(cfg.get("mcpServers"), dict) else {}
+    servers["nexus"] = mcp_http_block(url, secret)
+    cfg["mcpServers"] = servers
+    backup(target)
+    target.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    return InstallResult(True, "Wrote Antigravity MCP config",
+                         detail=f"Added nexus to {target}",
+                         changed_paths=[str(target)])
+
+
+# Gemini CLI / Qwen Code — write settings.json with mcpServers
+def install_gemini_cli() -> InstallResult:
+    url, secret = get_nexus_env()
+    target = HOME / ".gemini" / "settings.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        try:
+            cfg = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+    else:
+        cfg = {}
+    servers = cfg.get("mcpServers") if isinstance(cfg.get("mcpServers"), dict) else {}
+    servers["nexus"] = mcp_http_block(url, secret)
+    cfg["mcpServers"] = servers
+    backup(target)
+    target.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+
+    return InstallResult(True, "Wrote Gemini CLI MCP config",
+                         detail=f"Added nexus to {target}",
+                         changed_paths=[str(target)])
+
+
+def install_qwen_code() -> InstallResult:
+    url, secret = get_nexus_env()
+    target = HOME / ".qwen" / "settings.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        try:
+            cfg = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+    else:
+        cfg = {}
+    servers = cfg.get("mcpServers") if isinstance(cfg.get("mcpServers"), dict) else {}
+    servers["nexus"] = mcp_http_block(url, secret)
+    cfg["mcpServers"] = servers
+    backup(target)
+    target.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    return InstallResult(True, "Wrote Qwen Code MCP config",
+                         detail=f"Added nexus to {target}",
+                         changed_paths=[str(target)])
+
+
+# Codex CLI / Aider / Devin — write instruction file
+def install_codex_cli() -> InstallResult:
+    # Codex connection is via env vars + the rules file (AGENTS.md).
+    # Write env file so the agent has NEXUS_URL/SECRET available.
+    url, secret = get_nexus_env()
+    env_target = HOME / ".codex" / "nexus.env"
+    env_target.parent.mkdir(parents=True, exist_ok=True)
+    if env_target.exists():
+        backup(env_target)
+    env_target.write_text(
+        f"NEXUS_URL={url}\nNEXUS_SECRET={secret}\nNEXUS_AGENT_ID=codex-cli\n",
+        encoding="utf-8",
+    )
+    return InstallResult(True, "Codex: wrote env file (rules writer creates AGENTS.md)",
+                         detail=str(env_target), changed_paths=[str(env_target)])
+
+
+def install_aider() -> InstallResult:
+    url, secret = get_nexus_env()
+    env_target = HOME / ".aider" / "nexus.env"
+    env_target.parent.mkdir(parents=True, exist_ok=True)
+    if env_target.exists():
+        backup(env_target)
+    env_target.write_text(
+        f"NEXUS_URL={url}\nNEXUS_SECRET={secret}\nNEXUS_AGENT_ID=aider\n",
+        encoding="utf-8",
+    )
+    return InstallResult(True, "Aider: wrote env file (rules writer creates CONVENTIONS.md)",
+                         detail=str(env_target), changed_paths=[str(env_target)])
+
+
+def install_devin() -> InstallResult:
+    # Devin uses ~/.devin/NEXUS.md as its rules file (same file the rules writer populates)
+    return InstallResult(True, "Devin: rules writer populates ~/.devin/NEXUS.md",
+                         detail="Run with --with-rules to write the rules file.",
+                         changed_paths=[])
+
+
+# Goose / OpenHands / SWE-agent — env bootstrap
+def install_env_agent(name: str, dir_name: str) -> InstallResult:
+    url, secret = get_nexus_env()
+    target = HOME / f".{dir_name}" / "nexus.env"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    backup(target)
+    target.write_text(
+        f"NEXUS_URL={url}\nNEXUS_SECRET={secret}\nNEXUS_AGENT_ID={name}\n",
+        encoding="utf-8",
+    )
+    return InstallResult(True, f"Wrote {name} env file", detail=str(target),
+                         changed_paths=[str(target)])
+
+
+def install_goose() -> InstallResult:
+    return install_env_agent("goose", "goose")
+
+
+def install_openhands() -> InstallResult:
+    return install_env_agent("openhands", "openhands")
+
+
+def install_swe_agent() -> InstallResult:
+    return install_env_agent("swe-agent", "swe-agent")
+
+
+# Continue / Zed / Amp / PearAI — instructions/config
+def install_continue() -> InstallResult:
+    # Continue uses ~/.continue/NEXUS.md as its rules file (same file the rules writer populates)
+    return InstallResult(True, "Continue: rules writer populates ~/.continue/NEXUS.md",
+                         detail="Run with --with-rules to write the rules file.",
+                         changed_paths=[])
+
+
+def install_zed() -> InstallResult:
+    url, secret = get_nexus_env()
+    env_target = HOME / ".zed" / "nexus.env"
+    env_target.parent.mkdir(parents=True, exist_ok=True)
+    if env_target.exists():
+        backup(env_target)
+    env_target.write_text(
+        f"NEXUS_URL={url}\nNEXUS_SECRET={secret}\nNEXUS_AGENT_ID=zed\n",
+        encoding="utf-8",
+    )
+    return InstallResult(True, "Zed: wrote env file (rules writer creates AGENTS.md)",
+                         detail=str(env_target), changed_paths=[str(env_target)])
+
+
+def install_amp() -> InstallResult:
+    url, secret = get_nexus_env()
+    env_target = HOME / ".config" / "amp" / "nexus.env"
+    env_target.parent.mkdir(parents=True, exist_ok=True)
+    if env_target.exists():
+        backup(env_target)
+    env_target.write_text(
+        f"NEXUS_URL={url}\nNEXUS_SECRET={secret}\nNEXUS_AGENT_ID=amp\n",
+        encoding="utf-8",
+    )
+    return InstallResult(True, "Amp: wrote env file (rules writer creates AGENTS.md)",
+                         detail=str(env_target), changed_paths=[str(env_target)])
+
+
+def install_github_copilot() -> InstallResult:
+    target = Path.cwd() / ".github" / "copilot-instructions.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        target.write_text("# Copilot Instructions\n", encoding="utf-8")
+    return InstallResult(True, "Wrote GitHub Copilot instructions", detail=str(target),
+                          changed_paths=[str(target)])
+
+
+# ── Global rules writers (project = $HOME, not cwd) ──────────────────────
+# These install the canonical Nexus rules block at the agent's GLOBAL config
+# location so the rules apply to every project, every workspace. Use --local
+# to force project-level (cwd) instead for agents that support both.
+
+def _write_global_rules(path: Path, agent_name: str, *, local: bool = False) -> InstallResult:
+    """Write canonical Nexus rules to a global markdown file."""
+    if not _read_rules():
+        return InstallResult(False, "Canonical rules file missing",
+                             detail=f"Expected {RULES_PATH}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if append_rule_block(path, "## Nexus Memory"):
+        scope = "project" if local else "global"
+        return InstallResult(True, f"Wrote rules to {path} ({scope})",
+                             detail=str(path), changed_paths=[str(path)])
+    return InstallResult(True, f"Rules already present in {path}",
+                         detail=str(path), changed_paths=[])
+
+
+def install_rules_claude_code(*, local: bool = False) -> InstallResult:
+    target = HOME / ".claude" / "CLAUDE.md"
+    if local:
+        target = Path.cwd() / "CLAUDE.md"
+    return _write_global_rules(target, "claude-code", local=local)
+
+
+def install_rules_gemini_cli(*, local: bool = False) -> InstallResult:
+    target = HOME / ".gemini" / "GEMINI.md" if not local else Path.cwd() / "GEMINI.md"
+    return _write_global_rules(target, "gemini-cli", local=local)
+
+
+def install_rules_qwen_code(*, local: bool = False) -> InstallResult:
+    target = HOME / ".qwen" / "QWEN.md" if not local else Path.cwd() / "QWEN.md"
+    return _write_global_rules(target, "qwen-code", local=local)
+
+
+def install_rules_codex_cli(*, local: bool = False) -> InstallResult:
+    # Codex reads global ~/.codex/AGENTS.md and project AGENTS.md
+    target = HOME / ".codex" / "AGENTS.md" if not local else Path.cwd() / "AGENTS.md"
+    return _write_global_rules(target, "codex-cli", local=local)
+
+
+def install_rules_aider(*, local: bool = False) -> InstallResult:
+    # Aider reads CONVENTIONS.md (global: ~/.aider/CONVENTIONS.md; project: ./CONVENTIONS.md)
+    target = HOME / ".aider" / "CONVENTIONS.md" if not local else Path.cwd() / "CONVENTIONS.md"
+    return _write_global_rules(target, "aider", local=local)
+
+
+def install_rules_devin(*, local: bool = False) -> InstallResult:
+    target = HOME / ".devin" / "NEXUS.md" if not local else Path.cwd() / "NEXUS.md"
+    return _write_global_rules(target, "devin", local=local)
+
+
+def install_rules_continue(*, local: bool = False) -> InstallResult:
+    target = HOME / ".continue" / "NEXUS.md" if not local else Path.cwd() / ".continue" / "NEXUS.md"
+    return _write_global_rules(target, "continue", local=local)
+
+
+def install_rules_zed(*, local: bool = False) -> InstallResult:
+    # Zed supports both global rules and project AGENTS.md
+    if local:
+        target = Path.cwd() / "AGENTS.md"
+    else:
+        target = HOME / ".zed" / "AGENTS.md"
+    return _write_global_rules(target, "zed", local=local)
+
+
+def install_rules_amp(*, local: bool = False) -> InstallResult:
+    target = HOME / ".config" / "amp" / "AGENTS.md" if not local else Path.cwd() / "AGENTS.md"
+    return _write_global_rules(target, "amp", local=local)
+
+
+def install_rules_opencode(*, local: bool = False) -> InstallResult:
+    # OpenCode reads AGENTS.md from cwd; for global, we put it in the opencode config dir
+    if local:
+        target = Path.cwd() / "AGENTS.md"
+    else:
+        target = HOME / ".config" / "opencode" / "AGENTS.md"
+    return _write_global_rules(target, "opencode", local=local)
+
+
+def install_rules_cline(*, local: bool = False) -> InstallResult:
+    # Cline reads .clinerules from cwd. There's no fully global equivalent, but
+    # we can place the rules in a known global location and tell the user to symlink.
+    if local:
+        target = Path.cwd() / ".clinerules"
+        return _write_global_rules(target, "cline", local=True)
+    target = HOME / ".config" / "nexus" / "rules" / "cline.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if append_rule_block(target, "## Nexus Memory"):
+        return InstallResult(
+            True,
+            "Wrote rules to ~/.config/nexus/rules/cline.md (Cline reads .clinerules per-project)",
+            detail=f"Symlink to enable globally:  ln -sf {target} .clinerules",
+            changed_paths=[str(target)],
+        )
+    return InstallResult(True, "Rules already present", detail=str(target), changed_paths=[])
+
+
+def install_rules_cursor(*, local: bool = False) -> InstallResult:
+    # Cursor reads .cursor/rules/*.mdc from cwd
+    if local:
+        target = Path.cwd() / ".cursor" / "rules" / "nexus-memory.mdc"
+        return _write_global_rules(target, "cursor", local=True)
+    target = HOME / ".config" / "nexus" / "rules" / "cursor.mdc"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if append_rule_block(target, "## Nexus Memory"):
+        return InstallResult(
+            True,
+            "Wrote rules to ~/.config/nexus/rules/cursor.mdc (Cursor reads .cursor/rules/ per-project)",
+            detail=f"Symlink to enable:  ln -sf {target} .cursor/rules/nexus-memory.mdc",
+            changed_paths=[str(target)],
+        )
+    return InstallResult(True, "Rules already present", detail=str(target), changed_paths=[])
+
+
+def install_rules_windsurf(*, local: bool = False) -> InstallResult:
+    # Windsurf reads .windsurfrules from cwd
+    if local:
+        target = Path.cwd() / ".windsurfrules"
+        return _write_global_rules(target, "windsurf", local=True)
+    target = HOME / ".config" / "nexus" / "rules" / "windsurf.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if append_rule_block(target, "## Nexus Memory"):
+        return InstallResult(
+            True,
+            "Wrote rules to ~/.config/nexus/rules/windsurf.md (Windsurf reads .windsurfrules per-project)",
+            detail=f"Symlink to enable:  ln -sf {target} .windsurfrules",
+            changed_paths=[str(target)],
+        )
+    return InstallResult(True, "Rules already present", detail=str(target), changed_paths=[])
+
+
+def install_rules_antigravity(*, local: bool = False) -> InstallResult:
+    if local:
+        target = Path.cwd() / "AGENTS.md"
+    else:
+        target = HOME / ".gemini" / "antigravity" / "AGENTS.md"
+    return _write_global_rules(target, "antigravity", local=local)
+
+
+def install_rules_trae(*, local: bool = False) -> InstallResult:
+    if local:
+        target = Path.cwd() / "AGENTS.md"
+    else:
+        target = HOME / ".config" / "Trae" / "AGENTS.md"
+    return _write_global_rules(target, "trae", local=local)
+
+
+def install_rules_pearai(*, local: bool = False) -> InstallResult:
+    if local:
+        target = Path.cwd() / "AGENTS.md"
+    else:
+        target = HOME / ".config" / "PearAI" / "AGENTS.md"
+    return _write_global_rules(target, "pearai", local=local)
+
+
+def install_rules_github_copilot(*, local: bool = False) -> InstallResult:
+    # Copilot only reads project-level instructions
+    target = Path.cwd() / ".github" / "copilot-instructions.md"
+    return _write_global_rules(target, "github-copilot", local=True)
+
+
+# ── Skills writers (global) ──────────────────────────────────────────────
+# Skills are reusable, named instruction sets the LLM can discover. The
+# canonical Nexus skill tells the LLM exactly when to recall / save / reflect.
+
+def _write_global_skill(path: Path, agent_name: str) -> InstallResult:
+    """Write the canonical Nexus skill to an agent's skills directory."""
+    if not _read_skill():
+        return InstallResult(False, "Canonical skill file missing",
+                             detail=f"Expected {SKILL_PATH}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        # already installed — leave alone
+        return InstallResult(True, f"Skill already present at {path}",
+                             detail=str(path), changed_paths=[])
+    path.write_text(_read_skill(), encoding="utf-8")
+    return InstallResult(True, f"Wrote Nexus skill to {path}",
+                         detail=str(path), changed_paths=[str(path)])
+
+
+def install_skill_claude_code() -> InstallResult:
+    return _write_global_skill(HOME / ".claude" / "skills" / "nexus-memory" / "SKILL.md", "claude-code")
+
+
+def install_skill_opencode() -> InstallResult:
+    # OpenCode reads skills from ~/.config/opencode/skills/<name>/SKILL.md (Bun-based)
+    return _write_global_skill(HOME / ".config" / "opencode" / "skills" / "nexus-memory" / "SKILL.md", "opencode")
+
+
+def install_skill_continue() -> InstallResult:
+    # Continue skills live in config.yaml; we add a tools/entry instead
+    target = HOME / ".continue" / "config.yaml"
+    if not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("version: 0.0.1\n", encoding="utf-8")
+    try:
+        import yaml  # type: ignore
+        data = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
+    except ImportError:
+        # fallback: small manual edit
+        text = target.read_text(encoding="utf-8")
+        if "nexus-memory" in text:
+            return InstallResult(True, "Continue skill already present", detail=str(target), changed_paths=[])
+        backup(target)
+        target.write_text(text + "\n# Nexus Memory skill (see ~/.continue/NEXUS.md)\n", encoding="utf-8")
+        return InstallResult(True, "Appended note to ~/.continue/config.yaml", detail=str(target), changed_paths=[str(target)])
+    except Exception:
+        return InstallResult(False, "Could not parse ~/.continue/config.yaml", detail=str(target))
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("name", "Continue")
+    if "nexus-memory" not in str(data):
+        # Continue doesn't have a "skills" concept, but it has slash commands
+        cmds = data.setdefault("slashCommands", [])
+        if isinstance(cmds, list) and not any(c.get("name") == "nexus" for c in cmds if isinstance(c, dict)):
+            cmds.append({
+                "name": "nexus",
+                "description": "Recall or save Nexus memory (use /nexus recall <query> or /nexus save <content>)",
+            })
+    backup(target)
+    import yaml as _y
+    target.write_text(_y.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return InstallResult(True, "Added /nexus slash command to ~/.continue/config.yaml",
+                         detail=str(target), changed_paths=[str(target)])
+
+
+# ── Hooks writers (global) ──────────────────────────────────────────────
+# Hooks are event-driven automatic actions: pre/post-message recall/save.
+# For agents that already implement hooks in their plugin (Paperclip,
+# OpenClaw, Hermes, OpenCode plugin), we don't need a separate writer.
+
+def install_hooks_claude_code() -> InstallResult:
+    """Add Nexus hooks to ~/.claude/settings.json so every Claude Code session
+    auto-recalls before the first prompt and auto-saves after each turn."""
+    target = HOME / ".claude" / "settings.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        try:
+            cfg = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+    else:
+        cfg = {}
+    cfg.setdefault("hooks", {})
+
+    # Point at the existing hook scripts in scripts/hooks/
+    hooks_dir = ROOT / "scripts" / "hooks"
+    nexus_hooks = {
+        "SessionStart": [
+            {
+                "matcher": "startup|resume|clear|compact",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"python3 {hooks_dir / 'session_start.py'}",
+                        "timeout": 10,
+                    }
+                ],
+            }
+        ],
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"python3 {hooks_dir / 'prompt_recall.py'}",
+                        "timeout": 8,
+                    }
+                ],
+            }
+        ],
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": f"python3 {hooks_dir / 'stop_learn.py'}",
+                        "timeout": 10,
+                    }
+                ],
+            }
+        ],
+    }
+
+    changed = False
+    for event, hooks_list in nexus_hooks.items():
+        existing = cfg["hooks"].get(event, [])
+        if any("nexus" in str(h).lower() or "session_start" in str(h) or "prompt_recall" in str(h) or "stop_learn" in str(h) for h in existing):
+            continue
+        existing.extend(hooks_list)
+        cfg["hooks"][event] = existing
+        changed = True
+
+    if changed:
+        backup(target)
+        target.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    return InstallResult(True, "Wrote Nexus hooks to ~/.claude/settings.json",
+                         detail=f"SessionStart + UserPromptSubmit + Stop hooks pointing at scripts/hooks/*.py",
+                         changed_paths=[str(target)] if changed else [])
+
+
+# ── Agent registry ─────────────────────────────────────────────────────────
+
+def _path_exists(p: Path) -> bool:
+    return p.exists()
+
+
+def _which(p: str) -> bool:
+    return shutil.which(p) is not None
+
+
+def _cline_extension_installed(ide_dir: str) -> bool:
+    return (HOME / ".config" / ide_dir / "User" / "globalStorage" / "saoudrizwan.claude-dev").exists()
+
+
+def _any_vscode_extension_installed(ide_dir: str, ext_ids: list[str]) -> bool:
+    base = HOME / ".config" / ide_dir / "User" / "globalStorage"
+    if not base.exists():
+        return False
+    return any((base / eid).exists() for eid in ext_ids)
+
+
+AGENTS: list[AgentDef] = [
+    # ── First-class plugin install paths ─────────────────────────────────
+    AgentDef(
+        name="paperclip",
+        description="Paperclip AI (uses /api/plugins/install)",
+        category="plugin",
+        install_kind="plugin-api",
+        detect=lambda: _path_exists(HOME / ".config" / "paperclip") or _which("paperclip"),
+        install=install_paperclip,
+        docs_url="https://github.com/dylanmarriner/shared-memory-mcp/tree/main/paperclip-plugin",
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="openclaw",
+        description="OpenClaw agent (uses /api/plugins/install or env+config)",
+        category="plugin",
+        install_kind="plugin-api",
+        detect=lambda: _path_exists(HOME / ".openclaw") or _which("openclaw"),
+        install=install_openclaw,
+        docs_url="https://github.com/dylanmarriner/shared-memory-mcp/tree/main/openclaw-integration",
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="opencode",
+        description="OpenCode (uses `opencode plugin` or `opencode mcp add`)",
+        category="plugin",
+        install_kind="npm",
+        detect=lambda: _path_exists(HOME / ".config" / "opencode") or _which("opencode"),
+        install=install_opencode,
+        install_rules=install_rules_opencode,
+        install_skill=install_skill_opencode,
+        docs_url="https://github.com/dylanmarriner/shared-memory-mcp/tree/main/integrations/mcp",
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="claude-code",
+        description="Claude Code (uses `claude plugin install`)",
+        category="plugin",
+        install_kind="plugin-api",
+        detect=lambda: _path_exists(HOME / ".claude") or _which("claude"),
+        install=install_claude_code,
+        install_rules=install_rules_claude_code,
+        install_skill=install_skill_claude_code,
+        install_hooks=install_hooks_claude_code,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="hermes",
+        description="Hermes agent (Python memory provider)",
+        category="plugin",
+        install_kind="copy",
+        detect=lambda: _path_exists(HOME / ".hermes"),
+        install=install_hermes,
+        enabled_by_default=True,
+    ),
+
+    # ── MCP-config based ────────────────────────────────────────────────
+    AgentDef(
+        name="claude-desktop",
+        description="Claude Desktop (MCP via stdio)",
+        category="mcp-config",
+        install_kind="mcp-stdio",
+        detect=lambda: _path_exists(HOME / ".config" / "Claude"),
+        install=install_claude_desktop,
+        install_rules=install_rules_claude_code,  # same file
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="cline",
+        description="Cline standalone (VS Code-like extension)",
+        category="mcp-config",
+        install_kind="mcp-http",
+        detect=lambda: _path_exists(HOME / ".cline"),
+        install=install_cline_global,
+        install_rules=install_rules_cline,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="cursor",
+        description="Cursor (MCP HTTP)",
+        category="mcp-config",
+        install_kind="mcp-http",
+        detect=lambda: _path_exists(HOME / ".cursor"),
+        install=install_cursor,
+        install_rules=install_rules_cursor,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="vscode",
+        description="VS Code (MCP HTTP)",
+        category="mcp-config",
+        install_kind="mcp-http",
+        detect=lambda: _path_exists(HOME / ".config" / "Code"),
+        install=install_vscode,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="vscodium",
+        description="VSCodium (MCP HTTP)",
+        category="mcp-config",
+        install_kind="mcp-http",
+        detect=lambda: _path_exists(HOME / ".config" / "VSCodium"),
+        install=install_vscodium,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="windsurf",
+        description="Windsurf (MCP HTTP)",
+        category="mcp-config",
+        install_kind="mcp-http",
+        detect=lambda: _path_exists(HOME / ".codeium" / "windsurf"),
+        install=install_windsurf,
+        install_rules=install_rules_windsurf,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="antigravity",
+        description="Antigravity (MCP HTTP)",
+        category="mcp-config",
+        install_kind="mcp-http",
+        detect=lambda: _path_exists(HOME / ".gemini" / "antigravity") or _path_exists(HOME / ".config" / "Antigravity"),
+        install=install_antigravity,
+        install_rules=install_rules_antigravity,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="gemini-cli",
+        description="Gemini CLI (MCP via settings.json)",
+        category="mcp-config",
+        install_kind="mcp-http",
+        detect=lambda: _path_exists(HOME / ".gemini"),
+        install=install_gemini_cli,
+        install_rules=install_rules_gemini_cli,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="qwen-code",
+        description="Qwen Code (MCP via settings.json)",
+        category="mcp-config",
+        install_kind="mcp-http",
+        detect=lambda: _path_exists(HOME / ".qwen"),
+        install=install_qwen_code,
+        install_rules=install_rules_qwen_code,
+        enabled_by_default=True,
+    ),
+
+    # ── Env / instructions based ───────────────────────────────────────
+    AgentDef(
+        name="codex-cli",
+        description="Codex CLI (instructions file)",
+        category="instructions",
+        install_kind="config",
+        detect=lambda: _path_exists(HOME / ".codex") or _which("codex"),
+        install=install_codex_cli,
+        install_rules=install_rules_codex_cli,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="aider",
+        description="Aider (instructions file)",
+        category="instructions",
+        install_kind="config",
+        detect=lambda: _path_exists(HOME / ".aider") or _which("aider"),
+        install=install_aider,
+        install_rules=install_rules_aider,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="devin",
+        description="Devin CLI (instructions file)",
+        category="instructions",
+        install_kind="config",
+        detect=lambda: _path_exists(HOME / ".devin") or _which("devin"),
+        install=install_devin,
+        install_rules=install_rules_devin,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="goose",
+        description="Goose (env bootstrap)",
+        category="env",
+        install_kind="config",
+        detect=lambda: _path_exists(HOME / ".goose") or _which("goose"),
+        install=install_goose,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="openhands",
+        description="OpenHands (env bootstrap)",
+        category="env",
+        install_kind="config",
+        detect=lambda: _path_exists(HOME / ".openhands"),
+        install=install_openhands,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="swe-agent",
+        description="SWE-agent (env bootstrap)",
+        category="env",
+        install_kind="config",
+        detect=lambda: _path_exists(HOME / ".swe-agent"),
+        install=install_swe_agent,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="continue",
+        description="Continue.dev (instructions file)",
+        category="instructions",
+        install_kind="config",
+        detect=lambda: _path_exists(HOME / ".continue"),
+        install=install_continue,
+        install_rules=install_rules_continue,
+        install_skill=install_skill_continue,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="zed",
+        description="Zed (instructions file)",
+        category="instructions",
+        install_kind="config",
+        detect=lambda: _path_exists(HOME / ".zed"),
+        install=install_zed,
+        install_rules=install_rules_zed,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="amp",
+        description="Amp (instructions file)",
+        category="instructions",
+        install_kind="config",
+        detect=lambda: _path_exists(HOME / ".config" / "amp") or _path_exists(HOME / ".amp"),
+        install=install_amp,
+        install_rules=install_rules_amp,
+        enabled_by_default=True,
+    ),
+    AgentDef(
+        name="github-copilot",
+        description="GitHub Copilot Chat/Agent (project instructions)",
+        category="instructions",
+        install_kind="config",
+        detect=lambda: True,  # Always available — writes to project .github/copilot-instructions.md
+        install=install_github_copilot,
+        install_rules=install_rules_github_copilot,
+        enabled_by_default=False,  # Off by default — only writes to cwd
+    ),
+]
+
+
+# VS Code-like extension installers (Cline/Roo/Kilo/Kade in Windsurf/Antigravity/Trae/PearAI)
+VSCODE_LIKE_AGENTS: list[AgentDef] = []
+
+def _make_vscode_like(app_dir: str, agent_name: str) -> AgentDef:
+    """Generate a generic installer for Cline in a VS Code-like IDE."""
+    def _install() -> InstallResult:
+        return install_vscode_like(
+            app_dir, "saoudrizwan.claude-dev",
+            "settings/cline_mcp_settings.json", agent_name,
+        )
+    def _detect() -> bool:
+        return _cline_extension_installed(app_dir)
+    # Map app → rules writer
+    rules_writers = {
+        "Windsurf": install_rules_windsurf,
+        "Antigravity": install_rules_antigravity,
+        "Trae": install_rules_trae,
+        "PearAI": install_rules_pearai,
+    }
+    return AgentDef(
+        name=agent_name,
+        description=f"Cline inside {app_dir}",
+        category="mcp-config",
+        install_kind="mcp-http",
+        detect=_detect,
+        install=_install,
+        install_rules=rules_writers.get(app_dir),
+        enabled_by_default=True,
+    )
+
+
+for app, slug in [
+    ("Windsurf", "windsurf-cline"),
+    ("Antigravity", "antigravity-cline"),
+    ("Trae", "trae-cline"),
+    ("PearAI", "pearai-cline"),
+]:
+    VSCODE_LIKE_AGENTS.append(_make_vscode_like(app, slug))
+
+AGENTS.extend(VSCODE_LIKE_AGENTS)
+
+
+# ── Listing & summary ──────────────────────────────────────────────────────
+
+def list_agents() -> None:
+    print(f"{C.B}Supported agents{C.R}\n")
+    name_w = max(len(a.name) for a in AGENTS) + 2
+    for a in sorted(AGENTS, key=lambda x: x.name):
+        try:
+            detected = a.detect()
+        except Exception:
+            detected = False
+        status = f"{C.GRN}detected{C.R}" if detected else f"{C.DIM}not found{C.R}"
+        kind = f"{C.MG}{a.install_kind}{C.R}"
+        print(f"  {C.B}{a.name:<{name_w}}{C.R} {status:<18} {kind:<14} {a.description}")
+    print()
+    print(f"{C.B}Total:{C.R} {len(AGENTS)} agents  |  "
+          f"{C.GRN}{sum(1 for a in AGENTS if a.detect())}{C.R} detected on this machine")
+
+
+def run_for(
+    names: list[str],
+    *,
+    dry_run: bool = False,
+    with_rules: bool = True,
+    with_skills: bool = False,
+    with_hooks: bool = False,
+    local: bool = False,
+    use_agentmemory: bool = False,
+) -> tuple[int, int, list[tuple[str, InstallResult]]]:
+    # Stash backend choice so per-agent installers can read it without
+    # changing every function signature. Use a thread-safe int.
+    import threading
+    _backend_state = getattr(run_for, "_state", None)
+    if _backend_state is None:
+        _backend_state = {"use_agentmemory": False}
+        run_for._state = _backend_state
+    _backend_state["use_agentmemory"] = use_agentmemory
+    os.environ["NEXUS_USE_AGENTMEMORY"] = "1" if use_agentmemory else "0"
+
+    selected: list[AgentDef]
+    if not names:
+        selected = [a for a in AGENTS if a.detect() and a.enabled_by_default]
+    else:
+        by_name = {a.name: a for a in AGENTS}
+        selected = []
+        for n in names:
+            if n not in by_name:
+                err(f"Unknown agent: {n}")
+                return 0, 0, []
+            selected.append(by_name[n])
+
+    if not selected:
+        warn("No agents matched. Use --list to see all supported agents.")
+        return 0, 0, []
+
+    url, secret = get_nexus_env()
+    if secret == NEXUS_DEFAULT_SECRET_PLACEHOLDER and not use_agentmemory:
+        warn("NEXUS_SECRET is unset — configs will contain a placeholder. "
+             "Export NEXUS_SECRET before running agents.")
+    info(f"Nexus URL: {url}")
+    if use_agentmemory:
+        info(f"{C.MG}Backend: @agentmemory/mcp (npm) — alt-backend mode{C.R}")
+    info(f"Targeting {len(selected)} agent(s): {', '.join(a.name for a in selected)}")
+    flags = []
+    if with_rules:
+        flags.append("rules")
+    if with_skills:
+        flags.append("skills")
+    if with_hooks:
+        flags.append("hooks")
+    if local:
+        flags.append("local")
+    if use_agentmemory:
+        flags.append("agentmemory-backend")
+    if flags:
+        info(f"Also installing: {', '.join(flags)}")
+    print()
+
+    results: list[tuple[str, InstallResult]] = []
+    succeeded = 0
+    failed = 0
+    for a in selected:
+        if not a.detect():
+            warn(f"{a.name}: not detected on this machine (skipping)")
+            results.append((a.name, InstallResult(False, "not detected")))
+            failed += 1
+            continue
+        info(f"Installing into {C.B}{a.name}{C.R} ({a.description})...")
+        if dry_run:
+            dim(f"  would run: {a.install_kind}")
+            if with_rules and a.install_rules:
+                dim("  would install: rules")
+            if with_skills and a.install_skill:
+                dim("  would install: skill")
+            if with_hooks and a.install_hooks:
+                dim("  would install: hooks")
+            results.append((a.name, InstallResult(True, "dry-run")))
+            succeeded += 1
+            continue
+
+        # 1. Connection install
+        try:
+            r = a.install()
+        except Exception as e:
+            r = InstallResult(False, f"exception: {e}")
+        if r.success:
+            ok(f"{a.name} (connection): {r.message}")
+            if r.detail:
+                dim(r.detail)
+            succeeded += 1
+        else:
+            err(f"{a.name} (connection): {r.message}")
+            if r.detail:
+                dim(r.detail)
+            failed += 1
+        results.append((a.name + " (connection)", r))
+
+        # 2. Rules install (global by default)
+        if with_rules and a.install_rules:
+            try:
+                # The rules writer functions take a `local` kwarg
+                rr = a.install_rules(local=local)
+            except TypeError:
+                # Backward-compat: writer doesn't accept local
+                rr = a.install_rules()
+            except Exception as e:
+                rr = InstallResult(False, f"exception: {e}")
+            if rr.success:
+                ok(f"{a.name} (rules): {rr.message}")
+                if rr.detail:
+                    dim(rr.detail)
+                succeeded += 1
+            else:
+                err(f"{a.name} (rules): {rr.message}")
+                if rr.detail:
+                    dim(rr.detail)
+                failed += 1
+            results.append((a.name + " (rules)", rr))
+
+        # 3. Skills install (opt-in)
+        if with_skills and a.install_skill:
+            try:
+                rs = a.install_skill()
+            except Exception as e:
+                rs = InstallResult(False, f"exception: {e}")
+            if rs.success:
+                ok(f"{a.name} (skill): {rs.message}")
+                if rs.detail:
+                    dim(rs.detail)
+                succeeded += 1
+            else:
+                err(f"{a.name} (skill): {rs.message}")
+                if rs.detail:
+                    dim(rs.detail)
+                failed += 1
+            results.append((a.name + " (skill)", rs))
+
+        # 4. Hooks install (opt-in)
+        if with_hooks and a.install_hooks:
+            try:
+                rh = a.install_hooks()
+            except Exception as e:
+                rh = InstallResult(False, f"exception: {e}")
+            if rh.success:
+                ok(f"{a.name} (hooks): {rh.message}")
+                if rh.detail:
+                    dim(rh.detail)
+                succeeded += 1
+            else:
+                err(f"{a.name} (hooks): {rh.message}")
+                if rh.detail:
+                    dim(rh.detail)
+                failed += 1
+            results.append((a.name + " (hooks)", rh))
+
+    return succeeded, failed, results
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Install Nexus Memory into AI agents using their native install paths.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+examples:
+  %(prog)s --list                                show all supported agents + status
+  %(prog)s                                       detect & install everything (connection + rules)
+  %(prog)s --all                                 install into all supported (skip detection)
+  %(prog)s paperclip opencode                    install into specific agents
+  %(prog)s --with-skills --with-hooks            also install skills + hooks
+  %(prog)s --local                               write rules/skills to project (cwd) instead of global
+  %(prog)s --no-rules                            connection only, skip rules
+  %(prog)s --use-agentmemory                     wire @agentmemory/mcp as the backend instead of Nexus
+  %(prog)s --dry-run                             show what would happen
+  NEXUS_URL=http://x:7777 NEXUS_SECRET=abc %(prog)s --all
+""",
+    )
+    parser.add_argument("agents", nargs="*", help="Specific agents to install into (default: detect all)")
+    parser.add_argument("--all", action="store_true", help="Install into all supported agents (skip detection)")
+    parser.add_argument("--list", action="store_true", help="List supported agents and exit")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would happen without writing anything")
+    parser.add_argument("--no-color", action="store_true", help="Disable colored output")
+    parser.add_argument("--json", action="store_true", help="Output machine-readable summary")
+    parser.add_argument("--no-rules", action="store_true", help="Skip the global rules install (connection only)")
+    parser.add_argument("--with-skills", action="store_true", help="Also install the Nexus skill (when supported)")
+    parser.add_argument("--with-hooks", action="store_true", help="Also install event hooks (when supported)")
+    parser.add_argument("--local", action="store_true", help="Write rules/skills to project (cwd) instead of global")
+    parser.add_argument("--use-agentmemory", action="store_true",
+                        help="Wire @agentmemory/mcp as the memory backend (npm) instead of Nexus. "
+                             "Useful for users who want agentmemory's 43-tool surface.")
+    args = parser.parse_args()
+
+    C.enable(not args.no_color and sys.stdout.isatty())
+
+    # Plaintext-bearer guard (ported from rohitg00/agentmemory, Apache-2.0):
+    # warn once if NEXUS_SECRET is set and NEXUS_URL is plaintext HTTP
+    # to a non-loopback host. Set NEXUS_REQUIRE_HTTPS=1 to throw instead.
+    try:
+        sys.path.insert(0, str(ROOT))
+        from integrations._shared.plaintext_bearer_guard import check_plaintext_bearer
+        _seen_warning = {"fired": False}
+
+        def _warn_once(msg: str) -> None:
+            if _seen_warning["fired"]:
+                return
+            _seen_warning["fired"] = True
+            print(f"{C.YEL}! security:{C.R} {msg}", file=sys.stderr)
+
+        check_plaintext_bearer(
+            base_url=os.environ.get("NEXUS_URL", DEFAULT_NEXUS_URL),
+            secret=os.environ.get("NEXUS_SECRET", ""),
+            warn=_warn_once,
+        )
+    except RuntimeError:
+        raise
+    except Exception:
+        # guard import failure should never break the installer
+        pass
+
+    if args.list:
+        list_agents()
+        return 0
+
+    if args.all:
+        names = [a.name for a in AGENTS]
+    else:
+        names = args.agents
+
+    succeeded, failed, results = run_for(
+        names,
+        dry_run=args.dry_run,
+        with_rules=not args.no_rules,
+        with_skills=args.with_skills,
+        with_hooks=args.with_hooks,
+        local=args.local,
+        use_agentmemory=args.use_agentmemory,
+    )
+
+    print()
+    if args.json:
+        summary = {
+            "succeeded": succeeded,
+            "failed": failed,
+            "results": [
+                {"agent": n, "success": r.success, "message": r.message,
+                 "detail": r.detail, "changed_paths": r.changed_paths}
+                for n, r in results
+            ],
+        }
+        print(json.dumps(summary, indent=2))
+    else:
+        print(f"{C.B}Summary:{C.R} {C.GRN}{succeeded} ok{C.R}, "
+              f"{C.RED}{failed} failed{C.R} of {len(results)} total")
+        if failed:
+            print()
+            print(f"{C.DIM}Tip: ensure the agent is installed on this machine, "
+                  f"or use --list to see what is detected.{C.R}")
+    return 0 if failed == 0 else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

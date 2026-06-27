@@ -246,3 +246,49 @@ export const tools = {
     return { text: "Use the Nexus dashboard at http://100.93.75.87:7777/ to delete specific memories." };
   },
 };
+
+// ── OpenClaw memory-slot integration (3-section promptBuilder) ──────────────
+//
+// Pattern ported from rohitg00/agentmemory (Apache-2.0):
+// `integrations/openclaw/plugin.mjs` uses
+//   api.registerMemoryCapability({ promptBuilder: (params) => [...] })
+// to claim the OpenClaw `plugins.slots.memory` slot. The promptBuilder
+// returns a 3-section description so any agent that joins the
+// conversation understands:
+//   1) WHO provides the memory
+//   2) HOW recall works (which hook fires)
+//   3) HOW to treat recalled context (background, not authoritative)
+//
+// Nexus extends the same shape with slim-context injection (summary +
+// top-3 conclusions) so the agent's own recall is cheap.
+//
+// OpenClaw's `registerMemoryCapability` is optional. The plugin works
+// without it (it just won't appear in the memory-slot picker).
+
+import { createPlaintextBearerAuthGuard } from "../../../integrations/_shared/plaintext-bearer-guard.js";
+
+const _plaintextBearerWarned = { fired: false };
+function _plaintextBearerWarn(msg: string) {
+  if (_plaintextBearerWarned.fired) return;
+  _plaintextBearerWarned.fired = true;
+  console.warn(`[Nexus] ${msg}`);
+}
+
+export const memoryCapability = {
+  promptBuilder: (_params: { availableTools?: Set<string>; citationsMode?: string }) => {
+    const cfg = getConfig();
+    return [
+      `Long-term memory provider: Nexus (unified memory server on ${cfg.nexusUrl}).`,
+      `Nexus recalls relevant prior observations before each turn via the before-agent-start hook and captures completed turns via agent-end. Slim context (summary + top-3 conclusions) is injected to save tokens.`,
+      `Treat recalled context as background, not authoritative — prefer current workspace state and explicit user instructions when they conflict.`,
+    ];
+  },
+};
+
+// Wire the plaintext-bearer guard at module load so a misconfigured
+// NEXUS_URL + NEXUS_SECRET is caught before any HTTP request.
+const _cfg = getConfig();
+createPlaintextBearerAuthGuard({
+  warn: _plaintextBearerWarn,
+  envFlag: "NEXUS_REQUIRE_HTTPS",
+})(_cfg.nexusUrl, _cfg.nexusSecret);

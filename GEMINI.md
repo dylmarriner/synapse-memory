@@ -10,3 +10,8 @@ Use Nexus memory tools for durable preferences, lessons, fixes, decisions, and h
 Use `/home/macuntu/Documents/synapse-memory/scripts/nexus-rtk <command>` for noisy shell commands when possible;
 fall back to `rtk <command>` if the wrapper is unavailable.
 Do not store raw command noise as memory; save durable summaries/lessons only.
+
+
+## Nexus Memory
+
+Use `nexus` MCP server (configured above) for memory.

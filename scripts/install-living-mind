@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""
+install-living-mind — one-command setup of the Living Mind integration.
+
+Installs the right plugin for whichever agent(s) you use, and prints
+the env vars you need to set.  Idempotent — safe to run multiple
+times.
+
+Usage:
+    scripts/install-living-mind                 # interactive: asks which agents
+    scripts/install-living-mind --all           # install for all detected agents
+    scripts/install-living-mind claude-code opencode hermes
+    scripts/install-living-mind --list          # show what would be installed
+    scripts/install-living-mind --uninstall     # remove the integration
+
+Required env (or it'll prompt you):
+    NEXUS_URL    — base URL of the Nexus server
+    NEXUS_SECRET — bearer token
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import sys
+from pathlib import Path
+from typing import List, Optional
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PLUGINS_DIR = REPO_ROOT / "integrations" / "plugins"
+SKILLS_DIR = REPO_ROOT / "integrations" / "skills"
+RULES_DIR = REPO_ROOT / "integrations" / "rules"
+
+SUPPORTED_AGENTS = {
+    "claude-code": {
+        "description": "Claude Code (Anthropic)",
+        "plugin_source": PLUGINS_DIR / "claude-code-mind",
+        "install_paths": [
+            Path.home() / ".claude" / "plugins" / "mind",
+            Path.home() / ".config" / "claude" / "plugins" / "mind",
+        ],
+        "skill_target": Path.home() / ".claude" / "skills" / "mind-memory",
+        "skill_source": SKILLS_DIR / "mind-memory",
+        "rules_target": Path.home() / ".claude" / "CLAUDE.md",
+        "rules_source": RULES_DIR / "living-mind.md",
+    },
+    "opencode": {
+        "description": "OpenCode",
+        "plugin_source": PLUGINS_DIR / "opencode-mind",
+        "install_paths": [
+            Path.home() / ".opencode" / "plugins" / "mind",
+        ],
+        "skill_target": Path.home() / ".config" / "opencode" / "skills" / "mind-memory",
+        "skill_source": SKILLS_DIR / "mind-memory",
+    },
+    "hermes": {
+        "description": "Hermes (Nous Research)",
+        "plugin_source": PLUGINS_DIR / "hermes-mind",
+        "install_paths": [
+            Path.home() / ".hermes" / "hermes-agent" / "plugins" / "memory" / "mind",
+        ],
+    },
+}
+
+
+def detect_installed_agents() -> List[str]:
+    """Return the list of agents the user has installed (heuristic)."""
+    found = []
+    if (Path.home() / ".claude").exists():
+        found.append("claude-code")
+    if (Path.home() / ".opencode").exists():
+        found.append("opencode")
+    if (Path.home() / ".hermes").exists():
+        found.append("hermes")
+    return found
+
+
+def install_plugin(agent: str, install_root: Path) -> bool:
+    """Copy the plugin into the agent's plugin directory.  Returns True on success."""
+    config = SUPPORTED_AGENTS[agent]
+    source = config["plugin_source"]
+    if not source.exists():
+        print(f"  ✗ source not found: {source}")
+        return False
+
+    # Use the first install path from the agent's config (or build from install_root).
+    install_paths = config.get("install_paths", [])
+    if install_paths:
+        target = install_paths[0]
+    else:
+        target = install_root / agent / "mind"
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        print(f"  ✓ already installed at {target}")
+        return True
+    shutil.copytree(source, target)
+    print(f"  ✓ installed plugin at {target}")
+    return True
+
+
+def install_skill(agent: str) -> bool:
+    config = SUPPORTED_AGENTS.get(agent, {})
+    if "skill_target" not in config:
+        return False
+    target = config["skill_target"]
+    source = config["skill_source"]
+    if not source.exists():
+        return False
+    if target.exists():
+        print(f"  ✓ skill already installed at {target}")
+        return True
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, target)
+    print(f"  ✓ installed skill at {target}")
+    return True
+
+
+def install_rules(agent: str) -> bool:
+    config = SUPPORTED_AGENTS.get(agent, {})
+    if "rules_target" not in config:
+        return False
+    target = config["rules_target"]
+    source = config["rules_source"]
+    if not source.exists():
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        # Append if not already present
+        existing = target.read_text() if target.is_file() else ""
+        if "Living Mind Integration Rules" in existing:
+            print(f"  ✓ rules already present in {target}")
+            return True
+        with target.open("a") as f:
+            f.write("\n\n" + source.read_text())
+        print(f"  ✓ appended rules to {target}")
+        return True
+    shutil.copy(source, target)
+    print(f"  ✓ installed rules at {target}")
+    return True
+
+
+def uninstall_plugin(agent: str) -> bool:
+    config = SUPPORTED_AGENTS[agent]
+    target = config.get("install_paths", [Path.home() / ".claude" / "plugins" / "mind"])[0]
+    if not target.exists():
+        print(f"  - {target} does not exist, nothing to remove")
+        return True
+    shutil.rmtree(target)
+    print(f"  ✓ removed {target}")
+    return True
+
+
+def print_env_block():
+    print()
+    print("=" * 64)
+    print("Set these environment variables (or write to ~/.config/nexus/mind.env):")
+    print("=" * 64)
+    print()
+    nexus_url = os.environ.get("NEXUS_URL", "http://localhost:7777")
+    print(f'export NEXUS_URL="{nexus_url}"')
+    print('export NEXUS_SECRET="your-bearer-token-from-nexus"')
+    print('export MIND_ID="default"')
+    print('export AGENT_ID="your-agent-name"')
+    print()
+    print("=" * 64)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Install the Living Mind integration for one or more agents."
+    )
+    parser.add_argument(
+        "agents", nargs="*",
+        help="Agents to install for (claude-code, opencode, hermes). "
+             "Omit to be prompted, or use --all.",
+    )
+    parser.add_argument(
+        "--all", action="store_true",
+        help="Install for every agent that is currently installed.",
+    )
+    parser.add_argument(
+        "--list", action="store_true",
+        help="List the supported agents and exit.",
+    )
+    parser.add_argument(
+        "--uninstall", action="store_true",
+        help="Remove the integration from the named agents.",
+    )
+    args = parser.parse_args(argv)
+
+    if args.list:
+        print("Supported agents:")
+        for agent, config in SUPPORTED_AGENTS.items():
+            print(f"  {agent:12s}  {config['description']}")
+        return 0
+
+    if not args.agents:
+        if args.all:
+            args.agents = detect_installed_agents()
+            if not args.agents:
+                print("No agents detected on this machine.")
+                print("Run with an agent name: install-living-mind claude-code")
+                return 1
+        else:
+            print("Usage: install-living-mind [--all | agent [agent ...]]")
+            print("Supported agents:", ", ".join(SUPPORTED_AGENTS.keys()))
+            detected = detect_installed_agents()
+            if detected:
+                print(f"Detected on this machine: {', '.join(detected)}")
+            return 0
+
+    # Install into the agent's standard plugin directory under $HOME.
+    install_root = Path.home()
+
+    print(f"Living Mind installer")
+    print(f"  source: {PLUGINS_DIR}")
+    print(f"  home:   {install_root}")
+    print(f"  agents: {', '.join(args.agents)}")
+    print()
+
+    success = 0
+    for agent in args.agents:
+        if agent not in SUPPORTED_AGENTS:
+            print(f"  ✗ unknown agent: {agent}")
+            continue
+        print(f"[{agent}]")
+        if args.uninstall:
+            if uninstall_plugin(agent):
+                success += 1
+        else:
+            ok = install_plugin(agent, install_root)
+            if ok:
+                install_skill(agent)
+                install_rules(agent)
+                success += 1
+        print()
+
+    if not args.uninstall and success > 0:
+        print_env_block()
+
+    return 0 if success > 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,278 @@
+#!/usr/bin/env python3
+"""
+mind-cli — command-line interface for managing Living Minds.
+
+Usage:
+    scripts/mind-cli list                           # list all in-process minds
+    scripts/mind-cli show <mind_id>                 # show a mind's identity + opinions
+    scripts/mind-cli think <mind_id> <question>     # ask the mind a question
+    scripts/mind-cli reflect <mind_id> <topic>      # deep reflection
+    scripts/mind-cli opinions <mind_id> [topic]     # show opinions
+    scripts/mind-cli save <mind_id>                 # flush mind state to DB
+    scripts/mind-cli hydrate <mind_id>               # load mind state from DB
+    scripts/mind-cli forget <mind_id>                # prune old patterns
+
+Environment:
+    NEXUS_URL     — base URL (default http://localhost:7777)
+    NEXUS_SECRET  — bearer token
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import sys
+from typing import Any, Dict
+
+
+NEXUS_URL = os.environ.get("NEXUS_URL", "http://localhost:7777").rstrip("/")
+NEXUS_SECRET = os.environ.get("NEXUS_SECRET", "")
+
+
+def _err(msg: str) -> None:
+    print(f"error: {msg}", file=sys.stderr)
+
+
+def _http_get(path: str) -> Dict[str, Any]:
+    import urllib.request
+    if not NEXUS_SECRET:
+        _err("NEXUS_SECRET is not set")
+        sys.exit(2)
+    req = urllib.request.Request(
+        f"{NEXUS_URL}{path}",
+        headers={"Authorization": f"Bearer {NEXUS_SECRET}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        _err(f"GET {path} failed: {e}")
+        sys.exit(1)
+
+
+def _http_post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    import urllib.request
+    if not NEXUS_SECRET:
+        _err("NEXUS_SECRET is not set")
+        sys.exit(2)
+    req = urllib.request.Request(
+        f"{NEXUS_URL}{path}",
+        headers={
+            "Authorization": f"Bearer {NEXUS_SECRET}",
+            "Content-Type": "application/json",
+        },
+        data=json.dumps(payload).encode(),
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        _err(f"POST {path} failed: {e}")
+        sys.exit(1)
+
+
+def _print_json(obj: Any) -> None:
+    print(json.dumps(obj, indent=2, default=str))
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    data = _http_get("/v1/mind/registry")
+    print(f"Total minds: {data.get('total', 0)}\n")
+    for m in data.get("minds", []):
+        print(
+            f"  {m.get('mind_id', '?'):30s}  "
+            f"patterns={m.get('patterns_learned', 0):3d}  "
+            f"capabilities={m.get('capabilities', 0):3d}  "
+            f"relationships={m.get('relationships', 0):3d}  "
+            f"opinions={m.get('opinions_held', 0):3d}"
+        )
+    return 0
+
+
+def cmd_show(args: argparse.Namespace) -> int:
+    mind_id = args.mind_id
+    data = _http_get(f"/v1/mind/identity/{mind_id}")
+    print(f"\nMind: {data.get('mind_id', '?')}\n")
+    print("Description:")
+    print(data.get("description", "(none)"))
+    print()
+    identity = data.get("identity", {})
+    if identity.get("core_traits"):
+        print("Core traits:")
+        for t in identity["core_traits"]:
+            print(f"  - {t}")
+    if identity.get("capabilities"):
+        print("\nCapabilities:")
+        for c in identity["capabilities"]:
+            print(f"  - {c}")
+    if identity.get("limitations"):
+        print("\nLimitations:")
+        for l in identity["limitations"]:
+            print(f"  - {l}")
+    if identity.get("learned_patterns"):
+        print(f"\nLearned patterns ({len(identity['learned_patterns'])}):")
+        for p in identity["learned_patterns"][:5]:
+            print(f"  - {p.get('description', '?')}")
+        if len(identity["learned_patterns"]) > 5:
+            print(f"  ... and {len(identity['learned_patterns']) - 5} more")
+    return 0
+
+
+def cmd_think(args: argparse.Namespace) -> int:
+    payload = {
+        "mind_id": args.mind_id,
+        "question": args.question,
+        "reasoning_depth": args.depth,
+    }
+    data = _http_post("/v1/mind/think", payload)
+    if data.get("answer"):
+        print(data["answer"])
+    if data.get("clarifying_question"):
+        print(f"\n[Question back: {data['clarifying_question']}]")
+    if args.verbose:
+        print(f"\n[confidence: {data.get('confidence', 0):.2f}, "
+              f"memories: {len(data.get('memories_cited', []))}, "
+              f"proactive items: {len(data.get('proactive_context', []))}]")
+    return 0
+
+
+def cmd_reflect(args: argparse.Namespace) -> int:
+    payload = {
+        "mind_id": args.mind_id,
+        "topic": args.topic,
+        "depth": args.depth,
+    }
+    data = _http_post("/v1/mind/reflect", payload)
+    if data.get("answer"):
+        print(data["answer"])
+    if args.verbose:
+        print(f"\n[confidence: {data.get('confidence', 0):.2f}]")
+    return 0
+
+
+def cmd_opinions(args: argparse.Namespace) -> int:
+    path = f"/v1/mind/opinions/{args.mind_id}"
+    if args.topic:
+        path += f"?topic={args.topic}"
+    data = _http_get(path)
+    opinions = data.get("opinions", {})
+    if not opinions:
+        print("No opinions held yet.")
+        return 0
+    if args.json:
+        _print_json(opinions)
+        return 0
+    for topic, op in opinions.items():
+        if op is None:
+            continue
+        print(f"  {topic:30s}  {op.get('stance', '?'):10s}  "
+              f"strength={op.get('strength', 0):.2f}  "
+              f"evidence={op.get('evidence_count', 0)}")
+    return 0
+
+
+def cmd_save(args: argparse.Namespace) -> int:
+    """Save the mind's state to the database via an HTTP trigger.
+
+    This is a server-side operation — the CLI just calls the
+    registry endpoint, which the server routes to the in-process
+    mind's persistence path.
+    """
+    print(f"Saving mind '{args.mind_id}' to database...")
+    try:
+        _http_post(f"/v1/mind/identity/{args.mind_id}/save", {})
+        print("  done.")
+        return 0
+    except SystemExit as e:
+        # The endpoint may not exist — print a helpful message.
+        if e.code == 1:
+            print("  hint: the server doesn't have a /save endpoint yet.")
+            print("  state will be persisted on the next /think call that triggers learning.")
+        return e.code
+
+
+def cmd_hydrate(args: argparse.Namespace) -> int:
+    print(f"Hydrating mind '{args.mind_id}' from database...")
+    try:
+        _http_post(f"/v1/mind/identity/{args.mind_id}/hydrate", {})
+        print("  done.")
+        return 0
+    except SystemExit as e:
+        if e.code == 1:
+            print("  hint: hydration happens automatically on first /think call.")
+        return e.code
+
+
+def cmd_forget(args: argparse.Namespace) -> int:
+    print(f"Forgetting old patterns for mind '{args.mind_id}'...")
+    try:
+        _http_post(f"/v1/mind/identity/{args.mind_id}/forget", {})
+        print("  done.")
+        return 0
+    except SystemExit as e:
+        if e.code == 1:
+            print("  hint: pruning happens on the periodic learning tick.")
+        return e.code
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Command-line interface for Living Minds.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("list", help="List all in-process minds")
+
+    p_show = sub.add_parser("show", help="Show a mind's identity + opinions")
+    p_show.add_argument("mind_id")
+
+    p_think = sub.add_parser("think", help="Ask the mind a question")
+    p_think.add_argument("mind_id")
+    p_think.add_argument("question", nargs="+")
+    p_think.add_argument("--depth", default="standard", choices=["fast", "standard", "deep"])
+    p_think.add_argument("--verbose", "-v", action="store_true")
+
+    p_reflect = sub.add_parser("reflect", help="Deep reflection on a topic")
+    p_reflect.add_argument("mind_id")
+    p_reflect.add_argument("topic", nargs="+")
+    p_reflect.add_argument("--depth", default="mid", choices=["low", "mid", "high"])
+    p_reflect.add_argument("--verbose", "-v", action="store_true")
+
+    p_op = sub.add_parser("opinions", help="Show the mind's opinions")
+    p_op.add_argument("mind_id")
+    p_op.add_argument("topic", nargs="?")
+    p_op.add_argument("--json", action="store_true")
+
+    p_save = sub.add_parser("save", help="Flush mind state to DB")
+    p_save.add_argument("mind_id")
+
+    p_hyd = sub.add_parser("hydrate", help="Load mind state from DB")
+    p_hyd.add_argument("mind_id")
+
+    p_for = sub.add_parser("forget", help="Prune old patterns")
+    p_for.add_argument("mind_id")
+
+    args = parser.parse_args(argv)
+    if hasattr(args, "question") and isinstance(args.question, list):
+        args.question = " ".join(args.question)
+    if hasattr(args, "topic") and isinstance(args.topic, list):
+        args.topic = " ".join(args.topic)
+
+    cmd_map = {
+        "list": cmd_list,
+        "show": cmd_show,
+        "think": cmd_think,
+        "reflect": cmd_reflect,
+        "opinions": cmd_opinions,
+        "save": cmd_save,
+        "hydrate": cmd_hydrate,
+        "forget": cmd_forget,
+    }
+    return cmd_map[args.command](args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,14 @@
+{
+  "name": "opencode-mind",
+  "version": "1.0.0",
+  "description": "Living Mind integration for OpenCode",
+  "opencode": {
+    "hooks": {
+      "session_start": "node $PLUGIN_DIR/hooks/session_start.mjs",
+      "prompt_submit": "node $PLUGIN_DIR/hooks/prompt_submit.mjs"
+    },
+    "skills": [
+      "mind-memory"
+    ]
+  }
+}

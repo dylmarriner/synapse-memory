@@ -1,0 +1,23 @@
+{
+  "name": "@nexus/openclaw-mind",
+  "version": "1.0.0",
+  "description": "Living Mind integration for OpenClaw — seeds the agent's system prompt with the mind's identity + proactive context + opinions at every session start, and captures tool observations for the mind to learn from.",
+  "license": "MIT",
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./src/index.ts"],
+    "install": {
+      "localPath": "integrations/plugins/openclaw-mind",
+      "minHostVersion": ">=2026.4.30"
+    },
+    "compat": { "pluginApi": ">=2026.5.22" }
+  },
+  "opencode": {
+    "env": [
+      "NEXUS_URL",
+      "NEXUS_SECRET",
+      "MIND_ID",
+      "AGENT_ID"
+    ]
+  }
+}
