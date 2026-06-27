@@ -4,6 +4,7 @@ import Layout from './components/Layout';
 
 const Overview = lazy(() => import('./pages/Overview'));
 const Vault = lazy(() => import('./pages/Vault'));
+const Mind = lazy(() => import('./pages/Mind'));
 const Agents = lazy(() => import('./pages/Agents'));
 const Sessions = lazy(() => import('./pages/Sessions'));
 const RecallLab = lazy(() => import('./pages/RecallLab'));
@@ -13,6 +14,7 @@ const Console = lazy(() => import('./pages/Console'));
 const PAGES = {
   overview: Overview,
   vault: Vault,
+  mind: Mind,
   agents: Agents,
   sessions: Sessions,
   recalllab: RecallLab,

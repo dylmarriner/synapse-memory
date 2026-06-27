@@ -86,17 +86,15 @@ async def save_identity_to_db(mind_id: str, identity: Any, db: Any) -> None:
     """Flush an Identity object to the minds row."""
     try:
         from sqlalchemy import text
-        # The cast `AS jsonb` is a Postgres idiom.  SQLite ignores the
-        # cast and passes the bound parameter through unchanged, but
-        # SQLAlchemy sometimes drops the parameter when the cast is
-        # present on SQLite.  We use plain text columns everywhere and
-        # do the JSON encoding/decoding in Python.
+        # core_traits / learned_patterns / capabilities / limitations are
+        # JSONB columns (migration 006) — bind the encoded JSON through an
+        # explicit CAST so Postgres accepts the text parameter.
         await db.execute(text("""
             UPDATE minds
-            SET core_traits      = :core_traits,
-                learned_patterns = :learned_patterns,
-                capabilities     = :capabilities,
-                limitations      = :limitations,
+            SET core_traits      = CAST(:core_traits AS jsonb),
+                learned_patterns = CAST(:learned_patterns AS jsonb),
+                capabilities     = CAST(:capabilities AS jsonb),
+                limitations      = CAST(:limitations AS jsonb),
                 updated_at       = :updated_at
             WHERE name = :name
         """), {
@@ -152,7 +150,18 @@ async def save_opinions_to_db(mind_id: str, opinions: Any, db: Any) -> None:
             WHERE mind_id = (SELECT id FROM minds WHERE name = :name)
         """), {"name": mind_id})
         if opinions.opinions:
+            import uuid as _uuid
             for topic, op in opinions.opinions.items():
+                # memory_ids is a Postgres UUID[].  Keep only values that are
+                # valid UUIDs and pass them as an array literal cast to uuid[],
+                # so non-UUID ids (e.g. from tests) never abort the insert.
+                valid_ids = []
+                for mid in (op.memory_ids or []):
+                    try:
+                        valid_ids.append(str(_uuid.UUID(str(mid))))
+                    except (ValueError, AttributeError, TypeError):
+                        continue
+                mem_ids_literal = "{" + ",".join(valid_ids) + "}"
                 await db.execute(text("""
                     INSERT INTO mind_opinions
                         (mind_id, topic, stance, strength, evidence_count,
@@ -160,7 +169,7 @@ async def save_opinions_to_db(mind_id: str, opinions: Any, db: Any) -> None:
                     VALUES
                         ((SELECT id FROM minds WHERE name = :name),
                          :topic, :stance, :strength, :ev_count,
-                         :rationale, :mem_ids, :formed_at, :last_updated)
+                         :rationale, CAST(:mem_ids AS uuid[]), :formed_at, :last_updated)
                 """), {
                     "name": mind_id,
                     "topic": op.topic,
@@ -168,7 +177,7 @@ async def save_opinions_to_db(mind_id: str, opinions: Any, db: Any) -> None:
                     "strength": float(op.strength),
                     "ev_count": int(op.evidence_count),
                     "rationale": op.rationale,
-                    "mem_ids": json.dumps(list(op.memory_ids or [])),
+                    "mem_ids": mem_ids_literal,
                     "formed_at": datetime.now(timezone.utc).isoformat(),
                     "last_updated": datetime.now(timezone.utc).isoformat(),
                 })
@@ -181,16 +190,21 @@ async def load_relationships_from_db(mind_id: str, db: Any) -> Dict[str, Dict[st
     """Read all relationships for a mind."""
     try:
         from sqlalchemy import text
+        # Relationships are keyed by the stable agent *name*.  Prefer the
+        # stored agent_name; fall back to the registered agent's name when
+        # only the UUID FK is present (rows written before agent_name existed).
         result = await db.execute(text("""
-            SELECT agent_id, trust_level, interaction_count,
-                   shared_projects, communication_style
-            FROM mind_relationships
-            WHERE mind_id = (SELECT id FROM minds WHERE name = :name)
+            SELECT COALESCE(r.agent_name, a.name) AS agent_name,
+                   r.trust_level, r.interaction_count,
+                   r.shared_projects, r.communication_style
+            FROM mind_relationships r
+            LEFT JOIN agents a ON a.id = r.agent_id
+            WHERE r.mind_id = (SELECT id FROM minds WHERE name = :name)
         """), {"name": mind_id})
         out: Dict[str, Dict[str, Any]] = {}
         for row in result.fetchall():
-            agent_id, trust, count, projects, style = row
-            if agent_id is None:
+            agent_name, trust, count, projects, style = row
+            if not agent_name:
                 continue
             # shared_projects is stored as a JSON string
             if isinstance(projects, str):
@@ -200,8 +214,8 @@ async def load_relationships_from_db(mind_id: str, db: Any) -> Dict[str, Dict[st
                     projects = []
             elif projects is None:
                 projects = []
-            out[str(agent_id)] = {
-                "agent_id": str(agent_id),
+            out[str(agent_name)] = {
+                "agent_id": str(agent_name),
                 "trust_level": float(trust or 0.5),
                 "interaction_count": int(count or 0),
                 "shared_projects": list(projects or []),
@@ -221,18 +235,22 @@ async def save_relationships_to_db(mind_id: str, identity: Any, db: Any) -> None
             DELETE FROM mind_relationships
             WHERE mind_id = (SELECT id FROM minds WHERE name = :name)
         """), {"name": mind_id})
-        for agent_id, rel in identity.relationships.items():
+        for agent_name, rel in identity.relationships.items():
+            # Store the stable name as agent_name; resolve the UUID FK from
+            # the registry when the agent exists (NULL otherwise — the name
+            # is the source of truth, so an unregistered agent still persists).
             await db.execute(text("""
                 INSERT INTO mind_relationships
-                    (mind_id, agent_id, trust_level, interaction_count,
+                    (mind_id, agent_id, agent_name, trust_level, interaction_count,
                      shared_projects, communication_style, notes, updated_at)
                 VALUES
                     ((SELECT id FROM minds WHERE name = :name),
-                     :agent_id, :trust, :count,
-                     :projects, :style, :notes, :updated_at)
+                     (SELECT id FROM agents WHERE name = :agent_name LIMIT 1),
+                     :agent_name, :trust, :count,
+                     CAST(:projects AS jsonb), :style, :notes, :updated_at)
             """), {
                 "name": mind_id,
-                "agent_id": agent_id,
+                "agent_name": agent_name,
                 "trust": float(getattr(rel, "trust_level", 0.5) or 0.5),
                 "count": int(getattr(rel, "interaction_count", 0) or 0),
                 "projects": json.dumps(list(getattr(rel, "shared_projects", []) or [])),
@@ -257,29 +275,34 @@ async def save_conversation_turn(
     """Append one turn to the conversation log."""
     try:
         from sqlalchemy import text
+        # agent_id arrives as the stable agent *name*; resolve to the UUID FK
+        # (NULL when the agent isn't registered).
         await db.execute(text("""
             INSERT INTO conversations
                 (id, mind_id, agent_id, started_at, turn_count)
             VALUES
                 (:conv_id,
                  (SELECT id FROM minds WHERE name = :name),
-                 :agent_id, :started_at, :turn)
+                 (SELECT id FROM agents WHERE name = :agent_name LIMIT 1),
+                 :started_at, :turn)
             ON CONFLICT (id) DO UPDATE SET
                 turn_count = EXCLUDED.turn_count,
                 ended_at   = NULL
         """), {
             "conv_id": conversation_id,
             "name": mind_id,
-            "agent_id": agent_id,
+            "agent_name": agent_id,
             "started_at": datetime.now(timezone.utc).isoformat(),
             "turn": turn_number,
         })
+        # mind_response / reasoning_trace are jsonb columns — bind the encoded
+        # JSON through an explicit CAST so Postgres accepts the text param.
         await db.execute(text("""
             INSERT INTO conversation_turns
                 (conversation_id, turn_number, agent_message, mind_response,
                  reasoning_trace, confidence)
             VALUES
-                (:conv_id, :turn, :msg, :resp, :trace, :conf)
+                (:conv_id, :turn, :msg, CAST(:resp AS jsonb), CAST(:trace AS jsonb), :conf)
             ON CONFLICT (conversation_id, turn_number) DO NOTHING
         """), {
             "conv_id": conversation_id,
@@ -365,9 +388,8 @@ async def log_learning_event(
         await db.execute(text("""
             INSERT INTO mind_learning_events
                 (mind_id, kind, description, metadata, source)
-            VALUES
-                ((SELECT id FROM minds WHERE name = :name),
-                 :kind, :desc, :meta, :src)
+            SELECT m.id, :kind, :desc, CAST(:meta AS jsonb), :src
+            FROM minds m WHERE m.name = :name
         """), {
             "name": mind_id,
             "kind": kind,

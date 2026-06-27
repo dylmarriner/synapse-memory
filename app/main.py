@@ -347,15 +347,15 @@ async def _learning_loop(redis_client: aioredis.Redis, interval: int):
 
 
 async def _mind_periodic_learning_loop(interval_seconds: int = 3600):
-    """Periodic mind learning: prune old patterns, consolidate identity.
+    """Periodic mind learning: prune old patterns, then persist each mind.
 
-    Runs every `interval_seconds` (default: 1 hour).  The work is
-    intentionally light — it touches the in-process mind registry
-    only, never the database.  Per-mind work is also light: prune
-    patterns older than 90 days, recompute the self-description.
+    Runs every `interval_seconds` (default: 1 hour).  Per-mind work:
+    prune patterns older than 90 days, then flush the mind's identity,
+    opinions, and relationships to the database so the evolved state is
+    durable across restarts even when no conversation explicitly ends.
     """
     # Lazily import the mind module — it's a separate subsystem.
-    from app.mind import Identity
+    from app.mind import persist as _persist
     while True:
         await asyncio.sleep(interval_seconds)
         try:
@@ -374,6 +374,12 @@ async def _mind_periodic_learning_loop(interval_seconds: int = 3600):
                         )
                 except Exception as e:
                     log.debug("mind '%s' pruning failed: %s", mind.mind_id, e)
+                # Flush evolved state to the database (best-effort).
+                try:
+                    async with SessionLocal() as db:
+                        await _persist.save_mind(mind, db)
+                except Exception as e:
+                    log.debug("mind '%s' periodic save failed: %s", mind.mind_id, e)
         except Exception as e:
             log.warning("Mind periodic learning failed: %s", e)
 

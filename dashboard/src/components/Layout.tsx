@@ -5,6 +5,7 @@ import type { AgentSummary } from '../types/nexus';
 const TABS = [
   { id: 'overview', label: '◇ Overview' },
   { id: 'vault', label: '▣ Memory Vault' },
+  { id: 'mind', label: '◉ Living Mind' },
   { id: 'agents', label: '⌬ Agent Registry' },
   { id: 'sessions', label: '◷ Sessions' },
   { id: 'recalllab', label: '◬ Recall Lab' },

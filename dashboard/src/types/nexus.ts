@@ -149,3 +149,85 @@ export interface MemoryQualityResponse {
   memories_by_type: Record<string, number>;
   top_agents_by_memory_count: { agent: string; count: number }[];
 }
+
+// ── Living Mind ──────────────────────────────────────────────────────────────
+
+export interface MindLearnedPattern {
+  description: string;
+  learned_at: string;
+  importance: number;
+  evidence_count: number;
+  source: string;
+}
+
+export interface MindIdentity {
+  mind_id: string;
+  core_traits: string[];
+  learned_patterns: MindLearnedPattern[];
+  capabilities: string[];
+  limitations: string[];
+  relationships: Record<string, MindRelationship>;
+}
+
+export interface MindOpinion {
+  topic: string;
+  stance: 'positive' | 'negative' | 'neutral';
+  strength: number;
+  rationale: string | null;
+  evidence_count: number;
+  memory_ids: string[];
+  formed_at: string;
+  last_updated: string;
+}
+
+export interface MindRelationship {
+  agent_id: string;
+  trust_level: number;
+  interaction_count: number;
+  shared_projects: string[];
+  communication_style: string | null;
+  notes?: string | null;
+  last_interaction?: string | null;
+}
+
+export interface MindDashboardResponse {
+  mind_id: string;
+  self_description: string;
+  identity: MindIdentity;
+  opinions: Record<string, MindOpinion>;
+  relationships: Record<string, MindRelationship>;
+  stats: {
+    patterns_learned: number;
+    capabilities: number;
+    limitations: number;
+    opinions_held: number;
+    relationships: number;
+    active_conversations: number;
+  };
+  config: Record<string, unknown>;
+}
+
+export interface MindProactiveItem {
+  type: string;
+  content: string;
+  relevance: number;
+  source_memory_id: string | null;
+  created_at?: string;
+}
+
+export interface MindThinkResponse {
+  answer: string | null;
+  clarifying_question: string | null;
+  confidence: number;
+  memories_cited: unknown[];
+  proactive_context: MindProactiveItem[];
+  opinions_expressed: MindOpinion[];
+  reasoning_trace: {
+    intent?: string;
+    patterns?: string[];
+    insights?: string[];
+    conclusion?: string;
+    confidence?: number;
+    trace?: { name: string; output: string; confidence: number }[];
+  } | null;
+}

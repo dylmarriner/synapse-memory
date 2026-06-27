@@ -88,6 +88,13 @@ class MemoryRecallResponse(BaseModel):
     total: int
     modes_used: List[str]
     fusion: str = "rrf"
+    # Living Mind (active-memory mode) — populated only when recall is routed
+    # through the mind (USE_ACTIVE_MEMORY).  None/empty for plain recall, so
+    # existing clients are unaffected.
+    mind_answer: Optional[str] = None
+    mind_confidence: Optional[float] = None
+    proactive_context: List[Dict[str, Any]] = Field(default_factory=list)
+    reasoning_trace: Optional[Dict[str, Any]] = None
 
 
 class MemoryRecallDebugResponse(BaseModel):
