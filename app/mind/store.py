@@ -147,6 +147,8 @@ class NexusMemoryStore:
         agent_id: Optional[str] = None,
         limit: int = 20,
         mind_id: Optional[str] = None,
+        container_tag: Optional[str] = None,
+        scope: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Recall through the existing Nexus 4-mode fused search."""
         try:
@@ -164,8 +166,9 @@ class NexusMemoryStore:
                 vec = await vector_search(session, query, agent_id, None, limit)
                 lex = await lexical_search(session, query, agent_id, None, limit)
                 fused = reciprocal_rank_fusion([vec, lex])[:limit]
-            return [
-                {
+            results = []
+            for m in fused:
+                entry = {
                     "id": str(getattr(m, "id", "")),
                     "content": getattr(m, "content", ""),
                     "memory_type": getattr(m, "memory_type", "observation"),
@@ -175,8 +178,17 @@ class NexusMemoryStore:
                     "created_at": getattr(m, "created_at", None).isoformat() if getattr(m, "created_at", None) else None,
                     "mind_id": str(getattr(m, "mind_id", "") or "") or mind_id,
                 }
-                for m in fused
-            ]
+                # Apply container_tag / scope filters in-process as fallback
+                if container_tag and entry.get("container_tag") != container_tag:
+                    continue
+                if scope:
+                    from app.adopted import scope as _scope_mod
+                    scope_norm = _scope_mod.normalize(scope)
+                    mem_scope = entry.get("scope") or ""
+                    if not _scope_mod.matches(scope_norm, mem_scope):
+                        continue
+                results.append(entry)
+            return results
         except Exception as e:
             log.warning("NexusMemoryStore.recall failed: %s", e)
             return []
