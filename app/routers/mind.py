@@ -142,7 +142,7 @@ class ThinkResponse(BaseModel):
     answer: Optional[str] = None
     clarifying_question: Optional[str] = None
     confidence: float = 0.0
-    memories_cited: List[str] = Field(default_factory=list)
+    memories_cited: List[Any] = Field(default_factory=list)
     proactive_context: List[Dict[str, Any]] = Field(default_factory=list)
     opinions_expressed: List[Dict[str, Any]] = Field(default_factory=list)
     reasoning_trace: Optional[Dict[str, Any]] = None
