@@ -243,7 +243,35 @@ async def end_conversation(conversation_id: str, body: EndConversationRequest):
         result = await mind.conversations.end_conversation(conversation_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"unknown conversation_id: {conversation_id}")
+    # A conversation end is a natural checkpoint: flush the mind's evolved
+    # identity, opinions, and relationships to the database so they survive
+    # a restart (the design goal — conversation state is durable, not in-RAM).
+    await _save_mind_state(body.mind_id)
     return result
+
+
+@router.get("/proactive")
+async def proactive(
+    mind_id: str = "default",
+    agent_id: Optional[str] = Query(None),
+    question: Optional[str] = Query(None),
+):
+    """Surface the mind's proactive context for an agent, without being asked
+    a specific question.  Returns the items the mind thinks the agent should
+    know about right now (unfinished promises, recent work, contradictions,
+    time-sensitive notes, relationship insights)."""
+    mind = _get_mind(mind_id)
+    memories = await mind._retrieve_memories(question or "", {"agent_id": agent_id})
+    items = await mind.proactive.identify_context(
+        question=question or "",
+        memories=memories,
+        agent_id=agent_id,
+    )
+    return {
+        "mind_id": mind_id,
+        "agent_id": agent_id,
+        "proactive_context": [item.to_dict() for item in items],
+    }
 
 
 @router.get("/identity/{mind_id}")
@@ -309,10 +337,9 @@ async def dashboard(mind_id: str = "default"):
         "opinions": {
             topic: op.to_dict() for topic, op in opinions.items()
         },
-        "relationships": {
-            agent_id: rel.to_dict()
-            for agent_id, rel in identity["relationships"].items()
-        },
+        # `identity["relationships"]` is already serialised to plain dicts
+        # by Identity.to_dict() — pass it through as-is.
+        "relationships": identity["relationships"],
         "stats": {
             "patterns_learned": len(identity["learned_patterns"]),
             "capabilities": len(identity["capabilities"]),

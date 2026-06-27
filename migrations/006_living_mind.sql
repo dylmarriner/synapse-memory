@@ -37,6 +37,18 @@ CREATE TABLE IF NOT EXISTS mind_relationships (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(mind_id, agent_id)
 );
+-- The mind keys relationships by the stable agent *name* (the same key
+-- agents pass as agent_id).  agent_id (the UUID FK) is resolved when the
+-- agent is registered, but may be NULL for agents not yet in the registry.
+-- agent_name is the source of truth, so the legacy UNIQUE(mind_id, agent_id)
+-- (which collapsed all NULL-agent rows / never matched name keys) is
+-- replaced by a uniqueness guarantee on (mind_id, agent_name).
+ALTER TABLE mind_relationships
+    ADD COLUMN IF NOT EXISTS agent_name TEXT;
+ALTER TABLE mind_relationships
+    ALTER COLUMN agent_id DROP NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mind_relationships_name
+    ON mind_relationships(mind_id, agent_name);
 CREATE INDEX IF NOT EXISTS idx_mind_relationships_mind  ON mind_relationships(mind_id);
 CREATE INDEX IF NOT EXISTS idx_mind_relationships_agent ON mind_relationships(agent_id);
 

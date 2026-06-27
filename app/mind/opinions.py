@@ -140,9 +140,9 @@ class OpinionSystem:
         existing.last_updated = datetime.now(timezone.utc)
         return existing
 
-    def update(self, topic: str, new_evidence: Dict[str, Any]) -> Optional[Opinion]:
+    async def update(self, topic: str, new_evidence: Dict[str, Any]) -> Optional[Opinion]:
         """Convenience: update with a single new piece of evidence."""
-        return self.form_or_update(topic, [new_evidence])
+        return await self.form_or_update(topic, [new_evidence])
 
     # ------------------------------------------------------------------
     # Internals

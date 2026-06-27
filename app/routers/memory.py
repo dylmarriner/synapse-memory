@@ -138,13 +138,40 @@ async def recall(body: MemoryRecallRequest):
         try:
             from app.mind.active import MemoryRouter
             from app.routers.mind import _get_mind
+            from app.models.api import MemoryResult
             mind = _get_mind("default")
             router = MemoryRouter(mind)
-            return await router.recall(
+            reasoned = await router.recall(
                 query=body.query,
                 agent_id=body.agent_id,
                 limit=body.limit,
                 reasoning_depth="fast",
+            )
+            # Map the mind's reasoned response into the standard recall shape
+            # so existing clients keep working, while the reasoned answer,
+            # proactive context, and trace ride along in the optional fields.
+            cited = reasoned.get("memories_cited") or []
+            results = [
+                MemoryResult(
+                    id=str(m.get("id") or ""),
+                    content=m.get("content") or m.get("text") or "",
+                    memory_type=m.get("memory_type", "observation"),
+                    importance=float(m.get("importance", 0.5) or 0.5),
+                    agent_id=str(m.get("agent_id") or "") or None,
+                    metadata=m.get("metadata") or {},
+                )
+                for m in cited
+                if isinstance(m, dict) and m.get("id")
+            ]
+            return MemoryRecallResponse(
+                results=results,
+                total=len(results),
+                modes_used=["mind"],
+                fusion="mind",
+                mind_answer=reasoned.get("answer"),
+                mind_confidence=reasoned.get("confidence"),
+                proactive_context=reasoned.get("proactive_context") or [],
+                reasoning_trace=reasoned.get("reasoning_trace"),
             )
         except Exception as e:
             log.debug("active memory recall failed, falling back: %s", e)

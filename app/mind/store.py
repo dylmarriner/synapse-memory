@@ -177,6 +177,10 @@ class NexusMemoryStore:
                     "metadata": dict(getattr(m, "metadata_", None) or {}),
                     "created_at": getattr(m, "created_at", None).isoformat() if getattr(m, "created_at", None) else None,
                     "mind_id": str(getattr(m, "mind_id", "") or "") or mind_id,
+                    # Carry the adopted-pattern scoping columns through so the
+                    # container_tag / scope filters below actually match.
+                    "container_tag": getattr(m, "container_tag", None),
+                    "scope": getattr(m, "scope", None),
                 }
                 # Apply container_tag / scope filters in-process as fallback
                 if container_tag and entry.get("container_tag") != container_tag:
@@ -237,16 +241,20 @@ class NexusMemoryStore:
             from sqlalchemy import text
             from app.db import SessionLocal
             async with SessionLocal() as session:
+                # mind_id arrives as the stable mind *name* ("default"), not a
+                # UUID — resolve it via the minds registry.  INSERT…SELECT means
+                # a not-yet-persisted mind simply inserts nothing (no error)
+                # instead of violating the NOT NULL on mind_id.
                 await session.execute(text("""
-                    INSERT INTO mind_learning_events
-                        (mind_id, kind, description, metadata)
-                    VALUES
-                        (CAST(:mid AS uuid), :kind, :desc, CAST(:meta AS jsonb))
+                    INSERT INTO mind_learning_events (mind_id, kind, description, metadata, source)
+                    SELECT m.id, :kind, :desc, CAST(:meta AS jsonb), :src
+                    FROM minds m WHERE m.name = :name
                 """), {
-                    "mid": mind_id,
+                    "name": mind_id,
                     "kind": kind,
                     "desc": description,
                     "meta": __import__("json").dumps(metadata or {}),
+                    "src": (metadata or {}).get("source", "interaction"),
                 })
                 await session.commit()
         except Exception as e:
@@ -265,13 +273,18 @@ class NexusMemoryStore:
             from sqlalchemy import text
             from app.db import SessionLocal
             async with SessionLocal() as session:
+                # mind_id is a name; agent_id may be a name or None.  Resolve
+                # both through the registries via INSERT…SELECT so a missing
+                # mind row inserts nothing rather than raising.
                 await session.execute(text("""
                     INSERT INTO mind_proactive_log
                         (mind_id, agent_id, item_type, content, relevance)
-                    VALUES
-                        (CAST(:mid AS uuid), CAST(:aid AS uuid), :kind, :content, :rel)
+                    SELECT m.id,
+                           (SELECT id FROM agents WHERE name = :aid LIMIT 1),
+                           :kind, :content, :rel
+                    FROM minds m WHERE m.name = :name
                 """), {
-                    "mid": mind_id,
+                    "name": mind_id,
                     "aid": agent_id,
                     "kind": item_type,
                     "content": content,

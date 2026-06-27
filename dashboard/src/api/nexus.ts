@@ -71,6 +71,8 @@ import type {
   SessionItem,
   RecallDebugResponse,
   MemoryQualityResponse,
+  MindDashboardResponse,
+  MindThinkResponse,
 } from '../types/nexus';
 
 export async function fetchStats(): Promise<StatsResponse> {
@@ -178,4 +180,21 @@ export async function fetchSessionDetail(id: string, limit = 200): Promise<{
 
 export async function triggerConsolidate(): Promise<{ success: boolean; stats: Record<string, number> }> {
   return apiFetch('/v1/admin/consolidate', { method: 'POST' });
+}
+
+// ── Living Mind ──────────────────────────────────────────────────────────────
+
+export async function fetchMindDashboard(mindId = 'default'): Promise<MindDashboardResponse> {
+  return apiFetch<MindDashboardResponse>(`/v1/mind/dashboard?mind_id=${encodeURIComponent(mindId)}`);
+}
+
+export async function mindThink(payload: {
+  question: string;
+  mind_id?: string;
+  reasoning_depth?: 'fast' | 'standard' | 'deep';
+}): Promise<MindThinkResponse> {
+  return apiFetch<MindThinkResponse>('/v1/mind/think', {
+    method: 'POST',
+    body: JSON.stringify({ mind_id: 'default', reasoning_depth: 'standard', ...payload }),
+  });
 }
