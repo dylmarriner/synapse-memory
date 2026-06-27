@@ -72,7 +72,7 @@ class MindConfig:
     """Configuration for a Living Mind instance."""
     llm_model: str = "deepseek-chat"
     reasoning_depth: ReasoningDepth = ReasoningDepth.STANDARD
-    max_memories: int = 20
+    max_memories: int = 50
     max_proactive_items: int = 5
     min_clarification_threshold: int = 3   # Min memories to avoid asking back
     enable_proactive: bool = True
