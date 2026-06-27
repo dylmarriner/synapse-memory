@@ -14,6 +14,7 @@ import time
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
+from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
@@ -276,7 +277,8 @@ async def _run_migrations():
         # Adopted-pattern tables (migration 005).  Each block is wrapped
         # in its own try/except so a partial migration never blocks startup.
         try:
-            with open("/home/macuntu/Documents/synapse-memory/migrations/005_adopted.sql") as _f:
+            _migration_dir = Path(__file__).resolve().parents[1] / "migrations"
+            with open(_migration_dir / "005_adopted.sql") as _f:
                 adopted_sql = _f.read()
             for stmt in [s.strip() for s in adopted_sql.split(";") if s.strip()]:
                 # Skip pure comments / blanks.
@@ -294,7 +296,8 @@ async def _run_migrations():
         # Living Mind tables (migration 006).  Same try/except pattern —
         # never block startup on a partial migration.
         try:
-            with open("/home/macuntu/Documents/synapse-memory/migrations/006_living_mind.sql") as _f:
+            _migration_dir = Path(__file__).resolve().parents[1] / "migrations"
+            with open(_migration_dir / "006_living_mind.sql") as _f:
                 mind_sql = _f.read()
             for stmt in [s.strip() for s in mind_sql.split(";") if s.strip()]:
                 if not stmt or all(line.strip().startswith("--") for line in stmt.splitlines() if line.strip()):
