@@ -178,6 +178,7 @@ class LivingMind:
                         question=question,
                         memories=memories,
                         llm_client=self.llm,
+                        model=self.config.llm_model,
                     )
                     reasoning = enrich_reasoning_result(reasoning, llm_result)
             except Exception as e:
