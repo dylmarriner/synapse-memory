@@ -53,6 +53,7 @@ services:
       - "0.0.0.0:${NEXUS_PORT:-7777}:7777"
     environment:
       NEXUS_SECRET: ${NEXUS_SECRET}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
       DATABASE_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD:-nexuspassword}@postgres:5432/nexus
       REDIS_URL: redis://redis:6379/0
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -75,6 +76,7 @@ services:
       - .:/app:ro
     environment:
       NEXUS_SECRET: ${NEXUS_SECRET}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
       DATABASE_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD:-nexuspassword}@postgres:5432/nexus
       REDIS_URL: redis://redis:6379/0
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

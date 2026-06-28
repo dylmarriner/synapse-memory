@@ -460,6 +460,11 @@ def _verify_key(request: Request):
     token = auth.removeprefix("Bearer ").strip()
     if token == secret:
         return
+    # Separate dashboard password — lets the web UI authenticate without the
+    # agent-facing secret.  Only honoured when configured.
+    dash_pw = settings.dashboard_password
+    if dash_pw and token == dash_pw:
+        return
     if _verify_dashboard_token(token):
         return
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
