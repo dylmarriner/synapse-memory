@@ -115,7 +115,6 @@ services:
       llama-server:
         condition: service_started
       postgres:
-      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
