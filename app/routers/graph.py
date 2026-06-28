@@ -59,8 +59,8 @@ async def get_graph(
         SELECT r.id, r.from_entity_id, r.to_entity_id, r.relation_type,
                r.valid_from, r.valid_until, r.created_at, r.memory_id
         FROM relations r
-        WHERE r.from_entity_id = ANY(:node_ids::uuid[])
-          AND r.to_entity_id = ANY(:node_ids::uuid[])
+        WHERE r.from_entity_id = ANY(CAST(:node_ids AS uuid[]))
+          AND r.to_entity_id = ANY(CAST(:node_ids AS uuid[]))
           AND r.valid_from <= NOW()
           AND (r.valid_until IS NULL OR r.valid_until > NOW())
         LIMIT :elimit
@@ -172,7 +172,7 @@ async def get_connections(
             src_rows = (await db.execute(text("""
                 SELECT memory_id, source_id
                 FROM memory_sources
-                WHERE memory_id = ANY(:mids::uuid[]) AND source_kind = 'session'
+                WHERE memory_id = ANY(CAST(:mids AS uuid[])) AND source_kind = 'session'
             """), {"mids": mem_ids})).fetchall()
             for r in src_rows:
                 node = nodes.get(f"mem:{r.memory_id}")
@@ -187,7 +187,7 @@ async def get_connections(
         rel_rows = (await db.execute(text("""
             SELECT r.id, r.from_entity_id, r.to_entity_id, r.relation_type, r.memory_id
             FROM relations r
-            WHERE r.memory_id = ANY(:mids::uuid[])
+            WHERE r.memory_id = ANY(CAST(:mids AS uuid[]))
               AND r.valid_from <= NOW()
               AND (r.valid_until IS NULL OR r.valid_until > NOW())
         """), {"mids": mem_ids})).fetchall()
@@ -201,7 +201,7 @@ async def get_connections(
 
     if entity_ids:
         ent_rows = (await db.execute(text("""
-            SELECT id, name, entity_type FROM entities WHERE id = ANY(:eids::uuid[])
+            SELECT id, name, entity_type FROM entities WHERE id = ANY(CAST(:eids AS uuid[]))
         """), {"eids": list(entity_ids)})).fetchall()
         for r in ent_rows:
             add_node(f"ent:{r.id}", "entity", r.name, {"entity_type": r.entity_type or "unknown"})
