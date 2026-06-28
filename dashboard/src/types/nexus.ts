@@ -215,6 +215,78 @@ export interface MindProactiveItem {
   created_at?: string;
 }
 
+// ── Connections graph ────────────────────────────────────────────────────────
+
+export type ConnNodeType = 'memory' | 'entity' | 'opinion' | 'mind' | 'agent';
+
+export interface ConnNode {
+  id: string;
+  type: ConnNodeType;
+  label: string;
+  meta: Record<string, unknown>;
+}
+
+export interface ConnEdge {
+  from: string;
+  to: string;
+  kind: 'saved' | 'mentions' | 'relation' | 'evidence' | 'holds' | 'knows';
+  label?: string;
+}
+
+export interface ConnectionsResponse {
+  nodes: ConnNode[];
+  edges: ConnEdge[];
+  agent_id: string | null;
+  mind_id: string;
+  counts: Partial<Record<ConnNodeType, number>>;
+  node_count: number;
+  edge_count: number;
+}
+
+// ── Conversations & mind activity ────────────────────────────────────────────
+
+export interface MindConversation {
+  id: string;
+  agent_id: string;
+  started_at: string | null;
+  ended_at: string | null;
+  turn_count: number;
+  open: boolean;
+  summary: string | null;
+}
+
+export interface MindTurn {
+  turn_number: number;
+  agent_message: string;
+  mind_response: { answer?: string | null; clarifying_question?: string | null; confidence?: number } | null;
+  reasoning_trace: {
+    intent?: string;
+    patterns?: string[];
+    insights?: string[];
+    conclusion?: string;
+    trace?: { name: string; output: string; confidence: number }[];
+  } | null;
+  confidence: number | null;
+  created_at: string | null;
+}
+
+export interface MindLearningEvent {
+  kind: string;
+  description: string;
+  source: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string | null;
+}
+
+export interface MindProactiveLogItem {
+  item_type: string;
+  content: string;
+  relevance: number;
+  used: boolean;
+  agent_id: string;
+  created_at: string | null;
+}
+
 export interface MindThinkResponse {
   answer: string | null;
   clarifying_question: string | null;

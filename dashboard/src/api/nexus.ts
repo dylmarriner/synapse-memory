@@ -73,6 +73,11 @@ import type {
   MemoryQualityResponse,
   MindDashboardResponse,
   MindThinkResponse,
+  ConnectionsResponse,
+  MindConversation,
+  MindTurn,
+  MindLearningEvent,
+  MindProactiveLogItem,
 } from '../types/nexus';
 
 export async function fetchStats(): Promise<StatsResponse> {
@@ -197,4 +202,31 @@ export async function mindThink(payload: {
     method: 'POST',
     body: JSON.stringify({ mind_id: 'default', reasoning_depth: 'standard', ...payload }),
   });
+}
+
+// ── Connections graph ────────────────────────────────────────────────────────
+
+export async function fetchConnections(params?: { agentId?: string; limit?: number }): Promise<ConnectionsResponse> {
+  const qs = new URLSearchParams();
+  if (params?.agentId) qs.set('agent_id', params.agentId);
+  qs.set('limit', String(params?.limit ?? 120));
+  return apiFetch<ConnectionsResponse>(`/v1/graph/connections?${qs}`);
+}
+
+// ── Conversations & mind activity ────────────────────────────────────────────
+
+export async function fetchMindConversations(mindId = 'default', limit = 50): Promise<{ conversations: MindConversation[] }> {
+  return apiFetch(`/v1/mind/conversations?mind_id=${encodeURIComponent(mindId)}&limit=${limit}`);
+}
+
+export async function fetchMindConversationTurns(conversationId: string): Promise<{ turns: MindTurn[] }> {
+  return apiFetch(`/v1/mind/conversations/${encodeURIComponent(conversationId)}/turns`);
+}
+
+export async function fetchMindLearningEvents(mindId = 'default', limit = 100): Promise<{ events: MindLearningEvent[] }> {
+  return apiFetch(`/v1/mind/learning-events?mind_id=${encodeURIComponent(mindId)}&limit=${limit}`);
+}
+
+export async function fetchMindProactiveLog(mindId = 'default', limit = 100): Promise<{ items: MindProactiveLogItem[] }> {
+  return apiFetch(`/v1/mind/proactive-log?mind_id=${encodeURIComponent(mindId)}&limit=${limit}`);
 }
