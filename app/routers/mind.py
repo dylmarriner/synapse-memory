@@ -25,9 +25,12 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Body, Query
+from fastapi import APIRouter, HTTPException, Body, Query, Depends
 from pydantic import BaseModel, Field
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db import get_db
 from app.mind import (
     LivingMind,
     MindConfig,
@@ -297,6 +300,136 @@ async def get_opinions(mind_id: str, topic: Optional[str] = Query(None)):
     return {
         "mind_id": mind_id,
         "opinions": {t: o.to_dict() for t, o in mind.opinions.opinions.items()},
+    }
+
+
+@router.get("/conversations")
+async def list_conversations(
+    mind_id: str = "default",
+    limit: int = Query(default=50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Every conversation the mind has had — full transparency over dialogue.
+
+    Reads the persisted `conversations` archive (newest first), joined to the
+    agent name.  Each row carries turn_count, open/closed state, and summary.
+    """
+    rows = (await db.execute(text("""
+        SELECT c.id, COALESCE(a.name, '—') AS agent_name,
+               c.started_at, c.ended_at, c.turn_count, c.summary
+        FROM conversations c
+        LEFT JOIN agents a ON a.id = c.agent_id
+        WHERE c.mind_id = (SELECT id FROM minds WHERE name = :mind_name)
+        ORDER BY c.started_at DESC
+        LIMIT :limit
+    """), {"mind_name": mind_id, "limit": limit})).fetchall()
+    return {
+        "mind_id": mind_id,
+        "conversations": [
+            {
+                "id": str(r.id),
+                "agent_id": r.agent_name,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "ended_at": r.ended_at.isoformat() if r.ended_at else None,
+                "turn_count": int(r.turn_count or 0),
+                "open": r.ended_at is None,
+                "summary": r.summary,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/conversations/{conversation_id}/turns")
+async def conversation_turns_history(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Every turn of one conversation — each agent message and the mind's
+    full response, confidence, and reasoning trace.  This is where a single
+    'thought' is fully visible end to end."""
+    rows = (await db.execute(text("""
+        SELECT turn_number, agent_message, mind_response, reasoning_trace, confidence, created_at
+        FROM conversation_turns
+        WHERE conversation_id = CAST(:cid AS uuid)
+        ORDER BY turn_number ASC
+    """), {"cid": conversation_id})).fetchall()
+    return {
+        "conversation_id": conversation_id,
+        "turns": [
+            {
+                "turn_number": int(r.turn_number),
+                "agent_message": r.agent_message,
+                "mind_response": r.mind_response,
+                "reasoning_trace": r.reasoning_trace,
+                "confidence": float(r.confidence) if r.confidence is not None else None,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/learning-events")
+async def learning_events(
+    mind_id: str = "default",
+    limit: int = Query(default=100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+):
+    """Every learning the mind has extracted — its stream of 'thoughts':
+    patterns, capabilities, limitations, opinions formed, identity updates."""
+    rows = (await db.execute(text("""
+        SELECT kind, description, source, metadata, created_at
+        FROM mind_learning_events
+        WHERE mind_id = (SELECT id FROM minds WHERE name = :mind_name)
+        ORDER BY created_at DESC
+        LIMIT :limit
+    """), {"mind_name": mind_id, "limit": limit})).fetchall()
+    return {
+        "mind_id": mind_id,
+        "events": [
+            {
+                "kind": r.kind,
+                "description": r.description,
+                "source": r.source,
+                "metadata": r.metadata,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/proactive-log")
+async def proactive_log(
+    mind_id: str = "default",
+    limit: int = Query(default=100, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+):
+    """Every item the mind has proactively surfaced, with its relevance —
+    the record of what the mind volunteered without being asked."""
+    rows = (await db.execute(text("""
+        SELECT p.item_type, p.content, p.relevance, p.used, p.created_at,
+               COALESCE(a.name, '—') AS agent_name
+        FROM mind_proactive_log p
+        LEFT JOIN agents a ON a.id = p.agent_id
+        WHERE p.mind_id = (SELECT id FROM minds WHERE name = :mind_name)
+        ORDER BY p.created_at DESC
+        LIMIT :limit
+    """), {"mind_name": mind_id, "limit": limit})).fetchall()
+    return {
+        "mind_id": mind_id,
+        "items": [
+            {
+                "item_type": r.item_type,
+                "content": r.content,
+                "relevance": float(r.relevance or 0),
+                "used": bool(r.used),
+                "agent_id": r.agent_name,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ],
     }
 
 
