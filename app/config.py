@@ -24,9 +24,18 @@ class Settings(BaseSettings):
     # Living Mind reasoning models.  The mind reasons with a local Ollama model
     # (fast, on-GPU, no API cost) and falls back to a DeepSeek model when the
     # local call fails or returns nothing.
-    mind_llm_model: str = "qwen2.5:3b"
+    mind_llm_model: str = "qwen2.5:7b-instruct-q4_K_M"
     mind_fallback_model: str = "deepseek-chat"
     ollama_base_url: str = "http://172.20.0.1:11434/v1"
+
+    # Multi-step LLM pipeline (PR #10).  Each setting enables one
+    # capability of the new LLM-driven pipeline.  Disable any of these
+    # to fall back to deterministic behaviour for that step.
+    mind_enable_extract: bool = True            # pre-extract relevant claims before reason
+    mind_enable_verify: bool = True             # verify the draft answer at DEEP depth
+    mind_enable_llm_proactive: bool = True      # LLM-driven proactive surfacing
+    mind_enable_llm_opinion: bool = True        # LLM-driven opinion formation
+    mind_enable_related_graph: bool = True      # expand context with graph-related memories
 
     # Token/cost controls. Defaults favor concise LLM calls while preserving quality.
     llm_cost_saver: bool = True

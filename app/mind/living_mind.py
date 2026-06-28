@@ -79,6 +79,12 @@ class MindConfig:
     enable_proactive: bool = True
     enable_opinions: bool = True
     enable_learning: bool = True
+    # New (PR #10) — multi-step LLM pipeline
+    enable_extract: bool = True             # pre-extract relevant claims from memories
+    enable_verify: bool = True              # verify the draft answer against memories (DEEP only)
+    enable_llm_proactive: bool = True       # LLM-driven proactive surfacing (vs deterministic only)
+    enable_llm_opinion: bool = True         # LLM-driven opinion formation (vs deterministic only)
+    enable_related_graph: bool = True       # expand context with graph-related memories
 
 
 class LivingMind:
@@ -105,7 +111,8 @@ class LivingMind:
         mind_id: str,
         config: Optional[MindConfig] = None,
         memory_store: Any = None,    # The existing Nexus memory accessor
-        llm_client: Any = None,     # The LLM client used for reasoning
+        llm_client: Any = None,     # The LLM client used for reasoning (primary)
+        llm_fallback: Any = None,   # Optional secondary LLM used when the primary fails
     ) -> None:
         self.mind_id = mind_id
         self.config = config or MindConfig()
@@ -113,7 +120,7 @@ class LivingMind:
         self.llm = llm_client
         # Optional secondary LLM (e.g. DeepSeek) used when the primary
         # (local Ollama) call fails or returns nothing.  Wired by the router.
-        self.llm_fallback = None
+        self.llm_fallback = llm_fallback
 
         # Subsystems — wired up here so the rest of the code can
         # reach them via the mind (mind.reasoning, mind.identity, ...)
@@ -124,7 +131,9 @@ class LivingMind:
         self.learning = LearningSystem(mind_id=mind_id, identity=self.identity, opinions=self.opinions, memory_store=memory_store)
         self.conversations = ConversationManager(mind_id=mind_id, mind=self)
 
-        log.info("Living mind '%s' initialised (depth=%s)", mind_id, self.config.reasoning_depth.value)
+        log.info("Living mind '%s' initialised (depth=%s, primary=%s, fallback=%s)",
+                 mind_id, self.config.reasoning_depth.value,
+                 bool(llm_client), bool(llm_fallback))
 
     # ------------------------------------------------------------------
     # Core reasoning
@@ -142,12 +151,28 @@ class LivingMind:
         mind's perspective.  Returns a `MindResponse` with the
         reasoned answer, confidence, proactive context, and the
         reasoning trace.
+
+        Pipeline (PR #10):
+        1. Retrieve memories
+        2. Optional graph expansion (1-2 related memories the embedding missed)
+        3. Clarification check
+        4. Deterministic reasoning (always) + LLM multi-step pipeline (extract
+           → reason → verify) when an LLM is wired
+        5. Opinion formation (LLM if available, else deterministic)
+        6. Proactive surfacing (LLM + deterministic merged)
+        7. Compose + learn
         """
         depth = ReasoningDepth(reasoning_depth) if reasoning_depth else self.config.reasoning_depth
         context = context or {}
 
         # Step 1: Retrieve memories the rest of the pipeline will operate on
         memories = await self._retrieve_memories(question, context)
+
+        # Step 1b: Optional graph expansion — pull 1-2 related memories the
+        # embedding search missed.  Free (no LLM), pure DB.
+        related_lookup: Dict[str, List[str]] = {}
+        if self.config.enable_related_graph and memories:
+            related_lookup = await self._expand_via_graph(memories)
 
         # Step 2: Decide whether we need to ask for clarification
         if self._needs_clarification(question, memories):
@@ -159,72 +184,81 @@ class LivingMind:
                 memories_cited=[m.get("id") for m in memories if m.get("id")],
             )
 
-        # Step 3: Reason — the heavy lift.  Produces patterns, insights, conclusion.
-        # First the deterministic pipeline runs (always available), then
-        # if an LLM is wired, we enrich the result with one model call.
+        # Step 3: Deterministic reasoning + LLM enrichment.
         reasoning = await self.reasoning.reason(
             question=question,
             memories=memories,
             identity=self.identity,
             depth=depth,
         )
+
+        llm_pipeline_result: Optional[Dict[str, Any]] = None
         if self.llm is not None and depth != ReasoningDepth.FAST:
-            # One LLM call replaces the conclusion with a higher-quality
-            # reasoned answer.  Skipped in fast mode to keep latency low.
-            # Try the primary (local Ollama) model first; if it errors or
-            # returns nothing, fall back to the secondary (DeepSeek) model.
             try:
                 from app.mind.llm_reasoning import (
                     is_llm_available,
-                    llm_reason,
+                    run_pipeline,
                     enrich_reasoning_result,
                 )
-                llm_result = None
                 if is_llm_available(self.llm):
-                    llm_result = await llm_reason(
+                    llm_pipeline_result = await run_pipeline(
                         question=question,
                         memories=memories,
                         llm_client=self.llm,
-                        model=self.config.llm_model,
+                        llm_fallback=self.llm_fallback,
+                        primary_model=self.config.llm_model,
+                        fallback_model=self.config.fallback_llm_model,
+                        depth=depth.value,
+                        enable_extract=self.config.enable_extract,
+                        enable_verify=self.config.enable_verify,
+                        enable_proactive_llm=self.config.enable_llm_proactive,
+                        enable_opinion_llm=self.config.enable_llm_opinion,
+                        max_memories=self.config.max_memories,
+                        related_lookup=related_lookup,
                     )
-                # Fallback: primary unavailable, errored, or produced no answer.
-                if (llm_result is None or llm_result.error or not llm_result.answer) \
-                        and is_llm_available(self.llm_fallback):
-                    log.debug("mind '%s' primary LLM unproductive — trying fallback %s",
-                              self.mind_id, self.config.fallback_llm_model)
-                    fb = await llm_reason(
-                        question=question,
-                        memories=memories,
-                        llm_client=self.llm_fallback,
-                        model=self.config.fallback_llm_model,
-                    )
-                    if fb and not fb.error and fb.answer:
-                        llm_result = fb
-                if llm_result is not None:
-                    reasoning = enrich_reasoning_result(reasoning, llm_result)
+                    llm_result = llm_pipeline_result.get("reason")
+                    if llm_result is not None and not llm_result.error and llm_result.answer:
+                        reasoning = enrich_reasoning_result(reasoning, llm_result)
             except Exception as e:
-                log.debug("LLM enrichment failed, using deterministic: %s", e)
+                log.debug("LLM pipeline failed, using deterministic: %s", e)
 
-        # Step 4: Form or update opinions if the evidence warrants it
+        # Step 4: Form or update opinions.  Prefer the LLM's opinion when
+        # the pipeline ran.
         opinions: List[Opinion] = []
         if self.config.enable_opinions and reasoning.confidence >= 0.6:
             topic = self._extract_topic(question)
             if topic:
+                llm_op = None
+                if llm_pipeline_result is not None and self.config.enable_llm_opinion:
+                    llm_op = llm_pipeline_result.get("opinion")
+                    if llm_op is not None and getattr(llm_op, "error", None):
+                        llm_op = None
                 opinion = await self.opinions.form_or_update(
                     topic=topic,
                     evidence=memories,
                     current_stance_hint=reasoning.stance_hint,
+                    llm_opinion=llm_op,
                 )
                 if opinion is not None:
                     opinions.append(opinion)
 
-        # Step 5: Identify proactive context (always-on if enabled)
+        # Step 5: Identify proactive context (LLM + deterministic merged)
         proactive: List[ProactiveItem] = []
         if self.config.enable_proactive:
+            llm_pro = None
+            if (
+                llm_pipeline_result is not None
+                and self.config.enable_llm_proactive
+                and depth != ReasoningDepth.FAST
+            ):
+                llm_pro = llm_pipeline_result.get("proactive")
+                if llm_pro is not None and getattr(llm_pro, "error", None):
+                    llm_pro = None
             proactive = await self.proactive.identify_context(
                 question=question,
                 memories=memories,
                 agent_id=context.get("agent_id"),
+                llm_proactive=llm_pro,
             )
 
         # Step 6: Compose the final answer
@@ -373,6 +407,32 @@ class LivingMind:
             return None
         # Prefer the longest "topic-like" word
         return max(words, key=len).lower().strip("?.!")
+
+    async def _expand_via_graph(
+        self,
+        memories: List[Dict[str, Any]],
+    ) -> Dict[str, List[str]]:
+        """Pull 1-2 related memories per top memory from the graph.
+
+        Returns `{memory_id: [related_id, ...]}` so the formatter can
+        surface them.  This is a no-LLM, DB-only pass that helps the
+        LLM see connections the embedding search missed.
+        """
+        if not memories or not self.memory:
+            return {}
+        out: Dict[str, List[str]] = {}
+        for m in memories[: min(len(memories), 8)]:
+            mid = m.get("id")
+            if not mid:
+                continue
+            try:
+                related = await self.memory.get_related(memory_id=mid, limit=2)
+            except Exception as e:
+                log.debug("graph expand failed for %s: %s", mid, e)
+                continue
+            if related:
+                out[mid] = [r.get("id") for r in related if r.get("id")]
+        return out
 
     def _compose_answer(
         self,

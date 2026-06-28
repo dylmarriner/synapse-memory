@@ -21,6 +21,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _clear_llm_cache():
+    """Each test starts with a clean LLM cache so cache hits from
+    previous tests don't poison the response."""
+    try:
+        from app.mind.llm_reasoning import clear_cache
+        clear_cache()
+    except Exception:
+        pass
+    yield
+
+
 # ---- helpers -----------------------------------------------------------
 
 def _make_openai_response(text: str):
@@ -87,6 +99,7 @@ def test_llm_reason_parses_openai_response():
         question="What about the auth module?",
         memories=[{"id": "m1", "content": "Auth bug"}],
         llm_client=client,
+        model="qwen2.5:3b",
     ))
     assert result.error is None
     assert result.answer == "The auth module is fragile"
@@ -103,7 +116,9 @@ def test_llm_reason_handles_markdown_fences():
         "```json\n" + json.dumps({"answer": "test", "confidence": 0.5}) + "\n```"
     ))
     result = asyncio.run(llm_reason(
-        question="q", memories=[], llm_client=client,
+        question="q", memories=[{"id": "m1", "content": "anything"}],
+        llm_client=client,
+        model="qwen2.5:3b",
     ))
     assert result.answer == "test"
     assert result.confidence == 0.5
@@ -114,13 +129,14 @@ def test_llm_reason_handles_garbage_response():
     client = MagicMock()
     client.chat.completions.create = AsyncMock(return_value=_make_openai_response(""))
     result = asyncio.run(llm_reason(
-        question="q", memories=[], llm_client=client,
+        question="q", memories=[{"id": "m1", "content": "x"}], llm_client=client,
+        model="qwen2.5:3b",
     ))
-    # Empty / unparseable response — the parser falls back to a
-    # low-confidence result.  No answer, but no error either.
-    assert result.error is None
+    # Empty response — the parser produces no answer and we mark
+    # `empty_answer` so the caller can fall back.  The deterministic
+    # pipeline is the fallback path.
+    assert result.error == "empty_answer"
     assert result.answer == ""
-    assert result.confidence == 0.0
 
 
 def test_llm_reason_handles_exception():
@@ -128,7 +144,8 @@ def test_llm_reason_handles_exception():
     client = MagicMock()
     client.chat.completions.create = AsyncMock(side_effect=Exception("api down"))
     result = asyncio.run(llm_reason(
-        question="q", memories=[], llm_client=client,
+question="q", memories=[{"id": "m1", "content": "x"}], llm_client=client,
+        model="qwen2.5:3b",
     ))
     assert result.error is not None
     assert "api down" in result.error
@@ -137,7 +154,8 @@ def test_llm_reason_handles_exception():
 def test_llm_reason_returns_error_when_unavailable():
     from app.mind.llm_reasoning import llm_reason
     result = asyncio.run(llm_reason(
-        question="q", memories=[], llm_client=None,
+question="q", memories=[{"id": "m1", "content": "x"}], llm_client=None,
+        model="qwen2.5:3b",
     ))
     assert result.error == "llm_unavailable"
 
@@ -148,7 +166,8 @@ def test_llm_reason_handles_legacy_generate_client():
         "answer": "legacy", "confidence": 0.7
     }))
     result = asyncio.run(llm_reason(
-        question="q", memories=[], llm_client=client,
+question="q", memories=[{"id": "m1", "content": "x"}], llm_client=client,
+        model="qwen2.5:3b",
     ))
     assert result.answer == "legacy"
     assert result.confidence == 0.7

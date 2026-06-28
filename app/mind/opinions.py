@@ -84,24 +84,38 @@ class OpinionSystem:
         topic: str,
         evidence: List[Dict[str, Any]],
         current_stance_hint: Optional[str] = None,
+        llm_opinion: Optional[Any] = None,
     ) -> Optional[Opinion]:
         """Form a new opinion or update the existing one for this topic.
+
+        `llm_opinion` is an `OpinionDraft` (stance, strength, reasoning,
+        evidence).  When supplied it overrides both the hint and the
+        deterministic classifier — the LLM is the more reliable source.
 
         Returns the updated opinion, or None if there is not enough
         evidence to form a meaningful stance.
         """
         topic = topic.lower().strip()
-        if not evidence and current_stance_hint is None:
+        if not evidence and current_stance_hint is None and llm_opinion is None:
             return None
         if not topic:
             return None
 
-        # Classify the evidence unless a hint was provided
-        if current_stance_hint is None:
-            current_stance_hint = self._classify_evidence(evidence, topic)
-
-        # Compute the new stance + strength
-        new_stance, new_strength = self._aggregate(evidence, current_stance_hint)
+        # Prefer the LLM's opinion when available.
+        llm_rationale: Optional[str] = None
+        if llm_opinion is not None and not getattr(llm_opinion, "error", None):
+            try:
+                new_stance = Stance(getattr(llm_opinion, "stance", "neutral") or "neutral")
+            except ValueError:
+                new_stance = Stance.NEUTRAL
+            new_strength = float(getattr(llm_opinion, "strength", 0.0) or 0.0)
+            new_strength = max(0.0, min(1.0, new_strength))
+            llm_rationale = (getattr(llm_opinion, "reasoning", "") or "").strip() or None
+        else:
+            # Fall back to hint, then deterministic classifier
+            if current_stance_hint is None:
+                current_stance_hint = self._classify_evidence(evidence, topic)
+            new_stance, new_strength = self._aggregate(evidence, current_stance_hint)
 
         # Look up the existing opinion
         existing = self.opinions.get(topic)
@@ -110,6 +124,7 @@ class OpinionSystem:
                 topic=topic,
                 stance=new_stance,
                 strength=new_strength,
+                rationale=llm_rationale,
                 evidence_count=len(evidence),
                 memory_ids=[m.get("id", "") for m in evidence if m.get("id")][:20],
             )
@@ -120,6 +135,8 @@ class OpinionSystem:
         # Update: weighted average of old and new strength
         total_count = existing.evidence_count + len(evidence)
         if total_count == 0:
+            if llm_rationale:
+                existing.rationale = llm_rationale
             return existing
         old_weight = existing.evidence_count / total_count
         new_weight = len(evidence) / total_count
@@ -133,6 +150,8 @@ class OpinionSystem:
         existing.stance = new_stance
         existing.strength = min(1.0, combined_strength)
         existing.evidence_count = total_count
+        if llm_rationale:
+            existing.rationale = llm_rationale
         existing.memory_ids = list({
             *(existing.memory_ids or []),
             *(m.get("id", "") for m in evidence if m.get("id")),

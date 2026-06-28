@@ -28,10 +28,11 @@ log = logging.getLogger("nexus.mind.proactive")
 @dataclass
 class ProactiveItem:
     """One item the mind is proactively offering to the agent."""
-    type: str                                  # unfinished_promise | recent_work | contradiction | pattern | temporal | relationship
+    type: str                                  # unfinished_promise | recent_work | contradiction | pattern | temporal | relationship | llm_context
     content: str
     relevance: float = 0.5                      # 0..1
     source_memory_id: Optional[str] = None
+    why: Optional[str] = None                   # explanation (from LLM or rule)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -40,6 +41,7 @@ class ProactiveItem:
             "content": self.content,
             "relevance": self.relevance,
             "source_memory_id": self.source_memory_id,
+            "why": self.why,
             "created_at": self.created_at.isoformat(),
         }
 
@@ -69,8 +71,14 @@ class ProactiveSurfacing:
         question: str,
         memories: List[Dict[str, Any]],
         agent_id: Optional[str] = None,
+        llm_proactive: Optional[Any] = None,
     ) -> List[ProactiveItem]:
         """Identify proactive context items relevant to the question.
+
+        When `llm_proactive` is a `ProactiveResult` from the LLM pipeline,
+        those items are *merged* in (preferred over deterministic ones
+        on the same source memory) and ranked with the deterministic
+        results.
 
         Returns up to `max_items` items, ranked by relevance.
         """
@@ -80,6 +88,16 @@ class ProactiveSurfacing:
         items.extend(self._contradictions(memories, question))
         items.extend(self._time_sensitive(memories, question))
         items.extend(self._relationship_insights(agent_id))
+
+        # Merge LLM-sourced items.
+        if llm_proactive is not None and getattr(llm_proactive, "items", None):
+            for it in llm_proactive.items:
+                items.append(ProactiveItem(
+                    type="llm_context",
+                    content=it.text,
+                    relevance=0.8,  # LLM-sourced is higher-priority by default
+                    source_memory_id=(it.evidence[0] if it.evidence else None),
+                ))
         # Rank and take the top
         items.sort(key=lambda i: i.relevance, reverse=True)
         return items[: self.max_items]

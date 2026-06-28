@@ -75,6 +75,11 @@ def _get_mind(mind_id: str) -> LivingMind:
             config=MindConfig(
                 llm_model=_settings.mind_llm_model,
                 fallback_llm_model=_settings.mind_fallback_model,
+                enable_extract=_settings.mind_enable_extract,
+                enable_verify=_settings.mind_enable_verify,
+                enable_llm_proactive=_settings.mind_enable_llm_proactive,
+                enable_llm_opinion=_settings.mind_enable_llm_opinion,
+                enable_related_graph=_settings.mind_enable_related_graph,
             ),
             memory_store=store,
         )
