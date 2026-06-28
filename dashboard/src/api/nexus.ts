@@ -10,7 +10,7 @@ function getToken(): string {
   const stored = window.sessionStorage.getItem(TOKEN_KEY);
   if (stored) return stored;
 
-  const token = window.prompt('Enter Nexus dashboard token (from your .env NEXUS_SECRET):')?.trim() ?? '';
+  const token = window.prompt('Enter Nexus dashboard password:')?.trim() ?? '';
   if (token) window.sessionStorage.setItem(TOKEN_KEY, token);
   return token;
 }

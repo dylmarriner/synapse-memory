@@ -4,6 +4,10 @@ from typing import Optional
 
 class Settings(BaseSettings):
     nexus_secret: str = ""
+    # Optional separate credential for the web dashboard, so operators can
+    # log into the UI without handing out the agent-facing NEXUS_SECRET.
+    # Accepted by _verify_key in addition to nexus_secret when set.
+    dashboard_password: str = ""
     nexus_port: int = 7777
 
     database_url: str = "postgresql+asyncpg://nexus:nexuspassword@localhost:5435/nexus"
