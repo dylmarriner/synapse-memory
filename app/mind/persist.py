@@ -154,16 +154,16 @@ async def save_opinions_to_db(mind_id: str, opinions: Any, db: Any) -> None:
         if opinions.opinions:
             import uuid as _uuid
             for topic, op in opinions.opinions.items():
-                # memory_ids is a Postgres UUID[].  Keep only values that are
-                # valid UUIDs and pass them as an array literal cast to uuid[],
-                # so non-UUID ids (e.g. from tests) never abort the insert.
+                # memory_ids is a Postgres UUID[].  asyncpg binds arrays from a
+                # Python list (NOT a '{...}' literal string), so pass a list of
+                # valid UUID strings — non-UUID ids (e.g. from tests) are
+                # dropped so they never abort the insert.
                 valid_ids = []
                 for mid in (op.memory_ids or []):
                     try:
                         valid_ids.append(str(_uuid.UUID(str(mid))))
                     except (ValueError, AttributeError, TypeError):
                         continue
-                mem_ids_literal = "{" + ",".join(valid_ids) + "}"
                 await db.execute(text("""
                     INSERT INTO mind_opinions
                         (mind_id, topic, stance, strength, evidence_count,
@@ -171,7 +171,7 @@ async def save_opinions_to_db(mind_id: str, opinions: Any, db: Any) -> None:
                     VALUES
                         ((SELECT id FROM minds WHERE name = :name),
                          :topic, :stance, :strength, :ev_count,
-                         :rationale, CAST(:mem_ids AS uuid[]), :formed_at, :last_updated)
+                         :rationale, :mem_ids, :formed_at, :last_updated)
                 """), {
                     "name": mind_id,
                     "topic": op.topic,
@@ -179,7 +179,7 @@ async def save_opinions_to_db(mind_id: str, opinions: Any, db: Any) -> None:
                     "strength": float(op.strength),
                     "ev_count": int(op.evidence_count),
                     "rationale": op.rationale,
-                    "mem_ids": mem_ids_literal,
+                    "mem_ids": valid_ids,
                     "formed_at": datetime.now(timezone.utc),
                     "last_updated": datetime.now(timezone.utc),
                 })
