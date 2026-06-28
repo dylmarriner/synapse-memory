@@ -70,7 +70,8 @@ class MindResponse:
 @dataclass
 class MindConfig:
     """Configuration for a Living Mind instance."""
-    llm_model: str = "deepseek-chat"
+    llm_model: str = "qwen2.5:3b"               # primary (local Ollama) reasoning model
+    fallback_llm_model: str = "deepseek-chat"   # used when the primary call fails/returns empty
     reasoning_depth: ReasoningDepth = ReasoningDepth.STANDARD
     max_memories: int = 50
     max_proactive_items: int = 5
@@ -110,6 +111,9 @@ class LivingMind:
         self.config = config or MindConfig()
         self.memory = memory_store
         self.llm = llm_client
+        # Optional secondary LLM (e.g. DeepSeek) used when the primary
+        # (local Ollama) call fails or returns nothing.  Wired by the router.
+        self.llm_fallback = None
 
         # Subsystems — wired up here so the rest of the code can
         # reach them via the mind (mind.reasoning, mind.identity, ...)
@@ -167,12 +171,15 @@ class LivingMind:
         if self.llm is not None and depth != ReasoningDepth.FAST:
             # One LLM call replaces the conclusion with a higher-quality
             # reasoned answer.  Skipped in fast mode to keep latency low.
+            # Try the primary (local Ollama) model first; if it errors or
+            # returns nothing, fall back to the secondary (DeepSeek) model.
             try:
                 from app.mind.llm_reasoning import (
                     is_llm_available,
                     llm_reason,
                     enrich_reasoning_result,
                 )
+                llm_result = None
                 if is_llm_available(self.llm):
                     llm_result = await llm_reason(
                         question=question,
@@ -180,6 +187,20 @@ class LivingMind:
                         llm_client=self.llm,
                         model=self.config.llm_model,
                     )
+                # Fallback: primary unavailable, errored, or produced no answer.
+                if (llm_result is None or llm_result.error or not llm_result.answer) \
+                        and is_llm_available(self.llm_fallback):
+                    log.debug("mind '%s' primary LLM unproductive — trying fallback %s",
+                              self.mind_id, self.config.fallback_llm_model)
+                    fb = await llm_reason(
+                        question=question,
+                        memories=memories,
+                        llm_client=self.llm_fallback,
+                        model=self.config.fallback_llm_model,
+                    )
+                    if fb and not fb.error and fb.answer:
+                        llm_result = fb
+                if llm_result is not None:
                     reasoning = enrich_reasoning_result(reasoning, llm_result)
             except Exception as e:
                 log.debug("LLM enrichment failed, using deterministic: %s", e)
@@ -366,7 +387,8 @@ class LivingMind:
         if opinions:
             parts.append("\n\nMy take:")
             for op in opinions:
-                parts.append(f"- **{op.topic}**: {op.stance} (strength {op.strength:.2f}, {op.evidence_count} pieces of evidence)")
+                stance = op.stance.value if hasattr(op.stance, "value") else str(op.stance)
+                parts.append(f"- **{op.topic}**: {stance} (strength {op.strength:.2f}, {op.evidence_count} pieces of evidence)")
         if proactive:
             parts.append("\n\nProactive context:")
             for item in proactive[:3]:

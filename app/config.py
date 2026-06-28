@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     llm_model: str = "deepseek-chat"
     embedding_dims: int = 384
 
+    # Living Mind reasoning models.  The mind reasons with a local Ollama model
+    # (fast, on-GPU, no API cost) and falls back to a DeepSeek model when the
+    # local call fails or returns nothing.
+    mind_llm_model: str = "qwen2.5:3b"
+    mind_fallback_model: str = "deepseek-chat"
+    ollama_base_url: str = "http://172.20.0.1:11434/v1"
+
     # Token/cost controls. Defaults favor concise LLM calls while preserving quality.
     llm_cost_saver: bool = True
     llm_input_char_limit: int = 1200
