@@ -43,6 +43,46 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # ── LLM Inference layer ──────────────────────────────────────────────────
+
+  llama-server:
+    image: llama-server:latest
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/kfd:/dev/kfd
+    security_opt:
+      - seccomp=unconfined
+    volumes:
+      - /usr/share/ollama/.ollama/models/blobs:/models:ro
+    environment:
+      LD_LIBRARYORY: /usr/local/lib
+    command:
+      - --model
+      - /models/sha256-3e4cb14174460404e7a233e531675303b2fbf7749c02f91864fe311ab6344e4f
+      - --port
+      - "11434"
+      - --host
+      - 0.0.0.0
+      - --no-webui
+      - -c
+      - "2048"
+      - -ngl
+      - "999"
+      - --no-mmap
+      - --device
+      - Vulkan0
+      - --chat-template
+      - chatml
+      - --flash-attn
+      - "off"
+      - -b
+      - "512"
+      - -ub
+      - "512"
+      - -np
+      - "1"
+    restart: unless-stopped
+
   # ── Application layer ────────────────────────────────────────────────────
 
   nexus-api:
@@ -65,13 +105,16 @@ services:
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
       MIND_LLM_MODEL: ${MIND_LLM_MODEL:-qwen2.5:7b-instruct-q4_K_M}
       MIND_FALLBACK_MODEL: ${MIND_FALLBACK_MODEL:-deepseek-chat}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://172.20.0.1:11434/v1}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://llama-server:11434/v1}
       MIND_ENABLE_EXTRACT: ${MIND_ENABLE_EXTRACT:-true}
       MIND_ENABLE_VERIFY: ${MIND_ENABLE_VERIFY:-true}
       MIND_ENABLE_LLM_PROACTIVE: ${MIND_ENABLE_LLM_PROACTIVE:-true}
       MIND_ENABLE_LLM_OPINION: ${MIND_ENABLE_LLM_OPINION:-true}
       MIND_ENABLE_RELATED_GRAPH: ${MIND_ENABLE_RELATED_GRAPH:-true}
     depends_on:
+      llama-server:
+        condition: service_started
+      postgres:
       postgres:
         condition: service_healthy
       redis:
