@@ -95,6 +95,21 @@ async def _run_migrations():
         # Base tables via ORM
         await conn.run_sync(Base.metadata.create_all)
 
+        async def _safe_exec(sql, params=None, *, level="debug", label="migration step"):
+            """Run one idempotent migration statement inside its own SAVEPOINT.
+
+            asyncpg aborts the *entire* transaction on any statement error, so
+            without per-statement isolation one failure silently skips every
+            following statement (IF NOT EXISTS or not).  Wrapping each in a
+            nested transaction means a failure rolls back only that savepoint
+            and the migration continues.
+            """
+            try:
+                async with conn.begin_nested():
+                    await conn.execute(sql if not isinstance(sql, str) else text(sql), params or {})
+            except Exception as e:
+                getattr(log, level, log.debug)("%s skipped: %s", label, e)
+
         # Add new columns if upgrading from an older schema
         for col_sql in [
             "ALTER TABLE memories ADD COLUMN IF NOT EXISTS confirmed_count INT NOT NULL DEFAULT 0",
@@ -112,13 +127,10 @@ async def _run_migrations():
             "ALTER TABLE relations ADD COLUMN IF NOT EXISTS valid_from TIMESTAMPTZ NOT NULL DEFAULT NOW()",
             "ALTER TABLE relations ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ",
         ]:
-            try:
-                await conn.execute(text(col_sql))
-            except Exception:
-                pass
+            await _safe_exec(col_sql)
 
         # Summaries table (in case ORM didn't create it yet)
-        await conn.execute(text("""
+        await _safe_exec("""
             CREATE TABLE IF NOT EXISTS summaries (
                 id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                 agent_id    UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -126,22 +138,15 @@ async def _run_migrations():
                 memory_count INT NOT NULL DEFAULT 0,
                 created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
-        """))
-        await conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS idx_summaries_agent ON summaries(agent_id)"
-        ))
-        await conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS idx_summaries_agent_time ON summaries(agent_id, created_at DESC)"
-        ))
+        """, label="summaries table")
+        await _safe_exec("CREATE INDEX IF NOT EXISTS idx_summaries_agent ON summaries(agent_id)")
+        await _safe_exec("CREATE INDEX IF NOT EXISTS idx_summaries_agent_time ON summaries(agent_id, created_at DESC)")
 
         # Backfill missing column defaults for tables created before defaults were added
         for alter_default_sql in [
             "ALTER TABLE summaries ALTER COLUMN id SET DEFAULT gen_random_uuid()",
         ]:
-            try:
-                await conn.execute(text(alter_default_sql))
-            except Exception:
-                pass
+            await _safe_exec(alter_default_sql)
 
         for index_sql in [
             "CREATE INDEX IF NOT EXISTS idx_memories_embedding_hnsw ON memories USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)",
@@ -161,10 +166,7 @@ async def _run_migrations():
             # Bi-temporal relation index
             "CREATE INDEX IF NOT EXISTS idx_relations_valid_from ON relations(valid_from)",
         ]:
-            try:
-                await conn.execute(text(index_sql))
-            except Exception as e:
-                log.warning("Optional index skipped: %s", e)
+            await _safe_exec(index_sql, level="warning", label="Optional index")
 
         # Synapse-compat tables: projects, file_index, events
         for compat_sql in [
@@ -203,10 +205,7 @@ async def _run_migrations():
             )
             """,
         ]:
-            try:
-                await conn.execute(text(compat_sql.strip()))
-            except Exception as e:
-                log.warning("Synapse table create skipped: %s", e)
+            await _safe_exec(compat_sql.strip(), level="warning", label="Synapse table create")
 
         for compat_idx in [
             "CREATE INDEX IF NOT EXISTS idx_projects_key ON projects(key)",
@@ -215,10 +214,7 @@ async def _run_migrations():
             "CREATE INDEX IF NOT EXISTS idx_events_project ON events(project_key)",
             "CREATE INDEX IF NOT EXISTS idx_events_time ON events(project_key, created_at DESC)",
         ]:
-            try:
-                await conn.execute(text(compat_idx))
-            except Exception as e:
-                log.warning("Synapse index skip: %s", e)
+            await _safe_exec(compat_idx, level="warning", label="Synapse index")
 
         # Raw session archive + memory provenance tables.
         for session_sql in [
@@ -257,10 +253,7 @@ async def _run_migrations():
             )
             """,
         ]:
-            try:
-                await conn.execute(text(session_sql.strip()))
-            except Exception as e:
-                log.warning("Session table create skipped: %s", e)
+            await _safe_exec(session_sql.strip(), level="warning", label="Session table create")
 
         for session_idx in [
             "CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_name, started_at DESC)",
@@ -269,10 +262,7 @@ async def _run_migrations():
             "CREATE INDEX IF NOT EXISTS idx_memory_sources_memory ON memory_sources(memory_id)",
             "CREATE INDEX IF NOT EXISTS idx_memory_sources_source ON memory_sources(source_kind, source_id)",
         ]:
-            try:
-                await conn.execute(text(session_idx))
-            except Exception as e:
-                log.warning("Session index skipped: %s", e)
+            await _safe_exec(session_idx, level="warning", label="Session index")
 
         # Adopted-pattern tables (migration 005).  Each block is wrapped
         # in its own try/except so a partial migration never blocks startup.
@@ -284,10 +274,7 @@ async def _run_migrations():
                 # Skip pure comments / blanks.
                 if not stmt or all(line.strip().startswith("--") for line in stmt.splitlines() if line.strip()):
                     continue
-                try:
-                    await conn.execute(text(stmt))
-                except Exception as e:
-                    log.debug("Adopted SQL step skipped: %s", e)
+                await _safe_exec(stmt, label="Adopted SQL step")
         except FileNotFoundError:
             pass
         except Exception as e:
@@ -302,10 +289,7 @@ async def _run_migrations():
             for stmt in [s.strip() for s in mind_sql.split(";") if s.strip()]:
                 if not stmt or all(line.strip().startswith("--") for line in stmt.splitlines() if line.strip()):
                     continue
-                try:
-                    await conn.execute(text(stmt))
-                except Exception as e:
-                    log.debug("Mind SQL step skipped: %s", e)
+                await _safe_exec(stmt, label="Mind SQL step")
         except FileNotFoundError:
             pass
         except Exception as e:
@@ -313,14 +297,12 @@ async def _run_migrations():
 
 
         # Backfill basic device metadata so the dashboard can place legacy agents.
-        try:
-            await conn.execute(text("""
-                UPDATE agents
-                SET metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:patch AS jsonb)
-                WHERE NOT (metadata ? 'device') AND name != 'global'
-            """), {"patch": '{"device": "' + socket.gethostname() + '", "source": "nexus-api"}'})
-        except Exception as e:
-            log.warning("Agent device metadata backfill skipped: %s", e)
+        await _safe_exec("""
+            UPDATE agents
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:patch AS jsonb)
+            WHERE NOT (metadata ? 'device') AND name != 'global'
+        """, {"patch": '{"device": "' + socket.gethostname() + '", "source": "nexus-api"}'},
+            level="warning", label="Agent device metadata backfill")
 
 
 async def _ensure_global_agent():
