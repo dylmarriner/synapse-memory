@@ -106,7 +106,9 @@ async def save_identity_to_db(mind_id: str, identity: Any, db: Any) -> None:
             ]),
             "capabilities": json.dumps(list(identity.capabilities)),
             "limitations": json.dumps(list(identity.limitations)),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            # Pass a datetime object, not isoformat() — asyncpg binds
+            # timestamptz columns from datetime, and rejects strings.
+            "updated_at": datetime.now(timezone.utc),
         })
         await db.commit()
     except Exception as e:
@@ -178,8 +180,8 @@ async def save_opinions_to_db(mind_id: str, opinions: Any, db: Any) -> None:
                     "ev_count": int(op.evidence_count),
                     "rationale": op.rationale,
                     "mem_ids": mem_ids_literal,
-                    "formed_at": datetime.now(timezone.utc).isoformat(),
-                    "last_updated": datetime.now(timezone.utc).isoformat(),
+                    "formed_at": datetime.now(timezone.utc),
+                    "last_updated": datetime.now(timezone.utc),
                 })
         await db.commit()
     except Exception as e:
@@ -256,7 +258,7 @@ async def save_relationships_to_db(mind_id: str, identity: Any, db: Any) -> None
                 "projects": json.dumps(list(getattr(rel, "shared_projects", []) or [])),
                 "style": getattr(rel, "communication_style", None),
                 "notes": getattr(rel, "notes", None),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc),
             })
         await db.commit()
     except Exception as e:
@@ -292,7 +294,7 @@ async def save_conversation_turn(
             "conv_id": conversation_id,
             "name": mind_id,
             "agent_name": agent_id,
-            "started_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": datetime.now(timezone.utc),
             "turn": turn_number,
         })
         # mind_response / reasoning_trace are jsonb columns — bind the encoded
@@ -336,7 +338,7 @@ async def end_conversation_in_db(conversation_id: str, db: Any) -> None:
             WHERE id = :conv_id
         """), {
             "conv_id": conversation_id,
-            "ended_at": datetime.now(timezone.utc).isoformat(),
+            "ended_at": datetime.now(timezone.utc),
         })
         await db.commit()
     except Exception as e:
