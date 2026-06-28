@@ -470,6 +470,22 @@ app.include_router(adopted_router,                     tags=["adopted"], depende
 app.include_router(mind_router,                        tags=["mind"],    dependencies=[Depends(_verify_key)])
 
 
+# Serve the built React/Vite dashboard at /app (when present).  The bundle is
+# the client shell only — it's unauthenticated, but every /v1 data call it
+# makes is gated by _verify_key, and the app prompts for the dashboard
+# password.  Built with base='/app/' so asset URLs resolve here.
+try:
+    from fastapi.staticfiles import StaticFiles
+    _dash_dist = Path(__file__).resolve().parents[1] / "dashboard" / "dist"
+    if _dash_dist.is_dir():
+        app.mount("/app", StaticFiles(directory=str(_dash_dist), html=True), name="dashboard-app")
+        log.info("Serving React dashboard from %s at /app", _dash_dist)
+    else:
+        log.info("React dashboard dist not found at %s — /app not mounted", _dash_dist)
+except Exception as e:
+    log.warning("Dashboard static mount skipped: %s", e)
+
+
 @app.get("/.well-known/nexus/openapi.json", include_in_schema=False)
 async def nexus_openapi_spec():
     return FileResponse("integrations/openapi/nexus-memory.openapi.json", media_type="application/json")
