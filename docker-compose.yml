@@ -63,6 +63,9 @@ services:
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
+      MIND_LLM_MODEL: ${MIND_LLM_MODEL:-qwen2.5:3b}
+      MIND_FALLBACK_MODEL: ${MIND_FALLBACK_MODEL:-deepseek-chat}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://172.20.0.1:11434/v1}
     depends_on:
       postgres:
         condition: service_healthy

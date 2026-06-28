@@ -306,14 +306,20 @@ class ReasoningEngine:
         return "neutral"
 
     def _estimate_confidence(self, relevant: List[Dict[str, Any]], bonus: float = 0.0) -> float:
-        """Confidence is high when there are many relevant memories,
-        each with high importance.  Floor at 0.1 so we never report
-        a meaningless 0%."""
+        """Estimate how well the memories support a conclusion.
+
+        Count alone should not saturate confidence (50 loosely-matched
+        memories ≠ certainty), so the count term is capped low and the
+        bulk of the signal comes from the *average importance* of the
+        relevant memories plus any pattern bonus.  Floor at 0.1.
+        """
         if not relevant:
             return 0.1
-        base = min(1.0, 0.3 + 0.1 * len(relevant))
+        # Count contributes at most ~0.35 and saturates by ~8 memories.
+        count_term = min(0.35, 0.05 * len(relevant))
         avg_importance = sum(float(m.get("importance", 0.5) or 0.5) for m in relevant) / len(relevant)
-        return min(1.0, base + 0.4 * avg_importance + bonus)
+        score = 0.2 + count_term + 0.4 * avg_importance + bonus
+        return max(0.1, min(0.97, score))
 
 
 __all__ = ["ReasoningEngine", "ReasoningResult", "ReasoningStep"]

@@ -43,15 +43,18 @@ Rules:
 - If the memories do not support an answer, say so plainly.
 - Distinguish facts (memory-stated) from inferences (you reasoned).
 - Be concise: 2-4 sentences is usually enough.
+- Write a REAL answer in your own words — never copy the field
+  descriptions from the schema below.
 
-Output JSON:
+Respond with ONLY a JSON object of this shape (values are descriptions
+of what to put, not literal text to copy):
 {{
-  "answer": "The grounded answer.",
-  "evidence": ["memory-id-1", "memory-id-2"],
-  "confidence": 0.0,
-  "patterns": ["pattern you noticed", "..."],
-  "insights": ["insight you formed", "..."],
-  "stance": "positive | negative | neutral"
+  "answer": <2-4 sentence grounded answer to the question>,
+  "evidence": [<ids of memories you used>],
+  "confidence": <0.0-1.0 how well the memories support your answer>,
+  "patterns": [<connections you noticed across memories>],
+  "insights": [<things true given the memories but not stated by any one>],
+  "stance": <"positive" | "negative" | "neutral">
 }}"""
 
 
@@ -90,9 +93,9 @@ async def llm_reason(
     memories: List[Dict[str, Any]],
     llm_client: Any,
     *,
-    model: str = "gpt-4o-mini",
-    timeout: int = 15,
-    max_tokens: int = 600,
+    model: str = "qwen2.5:3b",
+    timeout: int = 30,
+    max_tokens: int = 800,
 ) -> LLMReasoningResult:
     """Call the LLM to reason over `memories` and answer `question`.
 
@@ -106,7 +109,7 @@ async def llm_reason(
 
     # Build the user message with the memories
     mem_lines = []
-    for m in memories[:10]:
+    for m in memories[:16]:
         mid = m.get("id", "")
         content = (m.get("content") or "")[:300]
         mem_lines.append(f"- id={mid}  text={content}")
