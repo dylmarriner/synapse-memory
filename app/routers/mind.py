@@ -186,6 +186,7 @@ class ThinkResponse(BaseModel):
     proactive_context: List[Dict[str, Any]] = Field(default_factory=list)
     opinions_expressed: List[Dict[str, Any]] = Field(default_factory=list)
     reasoning_trace: Optional[Dict[str, Any]] = None
+    code_symbols: List[Dict[str, Any]] = Field(default_factory=list)  # code-context symbols used by the mind
 
 
 class ReflectRequest(BaseModel):
