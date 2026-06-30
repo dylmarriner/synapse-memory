@@ -199,13 +199,13 @@ class LivingMind:
                 rows = decode_records(data["blob"])
                 return [
                     {
-                        "id": row.get("i", ""),
-                        "qualified_name": row.get("q", ""),
-                        "kind": row.get("k", ""),
-                        "path": row.get("f", ""),
-                        "start_line": row.get("s", ""),
-                        "end_line": row.get("e", ""),
-                        "docstring": row.get("d", ""),
+                        "id": row.get("id", ""),
+                        "qualified_name": row.get("qualified_name", ""),
+                        "kind": row.get("kind", ""),
+                        "path": row.get("path", ""),
+                        "start_line": row.get("start_line", ""),
+                        "end_line": row.get("end_line", ""),
+                        "docstring": row.get("docstring", ""),
                     }
                     for row in rows
                 ]
