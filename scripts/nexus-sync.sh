@@ -124,16 +124,22 @@ fi
 # Save the new hash
 echo "$new_hash" > "$HASH_FILE"
 
-# Register a hook so future events notify this machine
+# Register a hook so future events from other agents can be pulled
+# (using a Tailscale-reachable sentinel port; if not listening, the
+# register is a no-op and the hook system records the intent.)
+hook_payload=$(cat <<EOF
+{
+  "agent_id": "${AGENT_ID}",
+  "event": "memory.saved",
+  "callback_url": "http://${tailscale_ip}:${HOST_AGENT_PORT:-0}/nexus-inbox",
+  "metadata": {"hostname": "${hostname_short}", "last_sync": "$(date -Iseconds)"}
+}
+EOF
+)
 curl -sf -X POST "${NEXUS_URL}/v1/hooks/register" \
   -H "Authorization: Bearer ${NEXUS_SECRET}" \
   -H "Content-Type: application/json" \
   --max-time 10 \
-  -d "{
-    \"agent_id\": \"${AGENT_ID}\",
-    \"event\": \"memory.saved\",
-    \"callback_url\": \"http://${tailscale_ip}:0/sync\",
-    \"metadata\": {\"hostname\": \"${hostname_short}\"}
-  }" > /dev/null || true
+  -d "$hook_payload" > /dev/null || true
 
 echo "  pushed=${pushed} failed=${failed} session=${sid:-none}"

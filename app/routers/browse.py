@@ -113,13 +113,13 @@ async def list_agents(db: AsyncSession = Depends(get_db)):
     try:
         rows = await db.execute(text("""
             SELECT
-                a.id, a.name, a.representation, a.metadata, lm.latest_metadata,
+                a.id, a.name, a.representation, a.metadata, a.model AS agent_model, lm.latest_metadata,
                 COUNT(DISTINCT m.id) AS memory_count,
                 COUNT(DISTINCT e.id) AS entity_count,
                 COUNT(DISTINCT c.id) AS conclusion_count,
                 MAX(m.created_at) AS last_memory_at,
-                GREATEST(MAX(m.created_at), a.created_at) AS last_active,
-                COALESCE((a.metadata->>'session_count')::int, 0) AS session_count,
+                COALESCE(a.last_active, GREATEST(MAX(m.created_at), a.created_at)) AS last_active,
+                COALESCE(a.session_count, (a.metadata->>'session_count')::int, 0) AS session_count,
                 EXISTS(SELECT 1 FROM summaries s WHERE s.agent_id = a.id) AS has_summary
             FROM agents a
             LEFT JOIN memories    m ON m.agent_id = a.id
@@ -150,7 +150,7 @@ async def list_agents(db: AsyncSession = Depends(get_db)):
                 conclusion_count=r.conclusion_count or 0,
                 representation=r.representation,
                 capabilities=list(metadata.get("capabilities") or []),
-                model=metadata.get("model") or latest_metadata.get("model"),
+                model=r.agent_model or metadata.get("model") or latest_metadata.get("model"),
                 device=device,
                 hostname=hostname,
                 source=source,

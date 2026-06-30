@@ -52,8 +52,8 @@ async def start_session(body: SessionStartRequest, db: AsyncSession = Depends(ge
     started_at = result.scalar()
     await db.execute(text("""
         UPDATE agents SET session_count = session_count + 1, last_active = NOW()
-        WHERE id = CAST(:agent_id AS uuid)
-    """), {"agent_id": agent_uuid})
+        WHERE id = CAST(:agent_id AS uuid) OR name = :agent_name
+    """), {"agent_id": agent_uuid, "agent_name": body.agent_id})
     await db.commit()
     return SessionStartResponse(session_id=str(sid), agent_id=body.agent_id, started_at=started_at)
 

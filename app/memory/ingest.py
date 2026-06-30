@@ -238,9 +238,11 @@ async def _update_agent_metadata_from_memory(db: AsyncSession, agent: Optional[A
     try:
         await db.execute(text("""
             UPDATE agents
-            SET metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:patch AS jsonb)
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:patch AS jsonb),
+                model = COALESCE(NULLIF(model, ''), :model_col),
+                last_active = NOW()
             WHERE id = :id
-        """), {"id": agent.id, "patch": json.dumps(promoted)})
+        """), {"id": agent.id, "patch": json.dumps(promoted), "model_col": (promoted.get("model") or "")[:100]})
         await db.commit()
     except Exception as e:
         log.debug("Agent metadata promotion failed: %s", e)
