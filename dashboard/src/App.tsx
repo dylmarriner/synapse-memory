@@ -14,6 +14,7 @@ const Agents = lazy(() => import('./pages/Agents'));
 const Sessions = lazy(() => import('./pages/Sessions'));
 const Operations = lazy(() => import('./pages/Operations'));
 const Console = lazy(() => import('./pages/Console'));
+const Code = lazy(() => import('./pages/Code'));
 
 const PAGES = {
   hud: HUD,
@@ -28,6 +29,7 @@ const PAGES = {
   sessions: Sessions,
   ops: Operations,
   console: Console,
+  code: Code,
 } satisfies Record<string, React.LazyExoticComponent<React.FC>>;
 
 type PageId = keyof typeof PAGES;

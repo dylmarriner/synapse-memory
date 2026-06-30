@@ -16,6 +16,7 @@ const TABS = [
   { id: 'sessions', label: '◷ SESSIONS', desc: 'session log' },
   { id: 'ops', label: '⚡ OPS', desc: 'operations' },
   { id: 'console', label: '⌁ CONSOLE', desc: 'direct recall' },
+  { id: 'code', label: '⌬ CODE', desc: 'iris gate ladder' },
 ];
 
 interface LayoutProps {

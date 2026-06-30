@@ -238,3 +238,127 @@ export async function fetchMindLearningEvents(mindId = 'default', limit = 100): 
 export async function fetchMindProactiveLog(mindId = 'default', limit = 100): Promise<{ items: MindProactiveLogItem[] }> {
   return apiFetch(`/v1/mind/proactive-log?mind_id=${encodeURIComponent(mindId)}&limit=${limit}`);
 }
+
+// ── Code-context (Iris Gate Ladder) ──────────────────────────────────────
+
+export interface CodeStats {
+  repo_id: string;
+  files: number;
+  symbols: number;
+  edges: number;
+  languages: number;
+  wiki_articles: number;
+  iris_usage: Record<number, number>;
+  recent_runs: { id: string; files_indexed: number; symbols: number; edges: number; duration_ms: number; finished_at: string | null }[];
+}
+
+export interface SymbolCard {
+  id: string;
+  name: string;
+  qualified_name: string;
+  kind: string;
+  location: { path: string; start_line: number; end_line: number };
+  language: string;
+  signature: string;
+  docstring: string;
+  return_type: string;
+  parameters: { name: string }[];
+  decorators: string[];
+  visibility: string;
+  is_exported: boolean;
+  is_async: boolean;
+  complexity: number;
+  line_count: number;
+  source_snippet?: string;
+}
+
+export interface CodeRepo {
+  id: string;
+  name: string;
+  root_path: string;
+  agent_id: string | null;
+  last_indexed_at: string | null;
+  created_at: string | null;
+}
+
+export interface WikiArticle {
+  title: string;
+  slug: string;
+  section: string;
+  tokens: number;
+}
+
+export async function fetchCodeStats(): Promise<CodeStats> {
+  return apiFetch<CodeStats>('/v1/code/stats');
+}
+
+export async function fetchCodeRepos(): Promise<{ repos: CodeRepo[] }> {
+  return apiFetch<{ repos: CodeRepo[] }>('/v1/code/repos');
+}
+
+export async function indexCodeRepo(name: string, rootPath: string): Promise<{ repo_id: string; files_indexed: number; symbols: number; edges: number; duration_ms: number }> {
+  return apiFetch('/v1/code/repos', {
+    method: 'POST',
+    body: JSON.stringify({ name, root_path: rootPath, max_files: 5000 }),
+  });
+}
+
+export async function searchCodeSymbols(q: string, kind?: string, limit = 20): Promise<{ symbols: { id: string; name: string; qualified_name: string; kind: string; path: string; start_line: number; end_line: number; signature: string; docstring: string }[]; count: number }> {
+  const params = new URLSearchParams();
+  params.set('q', q);
+  params.set('limit', String(limit));
+  if (kind) params.set('kind', kind);
+  return apiFetch(`/v1/code/search?${params}`);
+}
+
+export async function getCodeSymbolCard(qualifiedName: string, includeSource = false): Promise<SymbolCard> {
+  const params = new URLSearchParams();
+  if (includeSource) params.set('include_source', 'true');
+  return apiFetch<SymbolCard>(`/v1/code/symbol/${encodeURIComponent(qualifiedName)}?${params}`);
+}
+
+export interface IrisResult {
+  rung: number;
+  card?: SymbolCard;
+  bytes?: number;
+  est_tokens?: number;
+  error?: string;
+}
+
+export async function irisGate(symbol: string, rung: number, justification?: string): Promise<IrisResult> {
+  return apiFetch<IrisResult>('/v1/code/iris', {
+    method: 'POST',
+    body: JSON.stringify({ symbol, rung, ...(justification ? { justification } : {}) }),
+  });
+}
+
+export interface BlastResult {
+  target: string;
+  depth: number;
+  total_affected: number;
+  by_depth: Record<number, number>;
+  symbols: { depth: number; symbol: { name: string; qualified_name: string; kind: string } }[];
+}
+
+export async function blastRadius(target: string, depth = 2): Promise<BlastResult> {
+  return apiFetch<BlastResult>('/v1/code/blast', {
+    method: 'POST',
+    body: JSON.stringify({ target, depth }),
+  });
+}
+
+export async function getFileOutline(path: string): Promise<{ file: string; language: string; bytes: number; line_count: number; symbols: { name: string; qualified_name: string; kind: string; start_line: number; end_line: number; signature: string }[] }> {
+  return apiFetch(`/v1/code/file/outline?path=${encodeURIComponent(path)}`);
+}
+
+export async function generateWiki(): Promise<{ sections: Record<string, string>; stats: { files: number; symbols: number; edges: number; languages: number } }> {
+  return apiFetch('/v1/code/wiki/generate', { method: 'POST' });
+}
+
+export async function fetchWikiIndex(): Promise<{ articles: WikiArticle[]; count: number }> {
+  return apiFetch<{ articles: WikiArticle[]; count: number }>('/v1/code/wiki');
+}
+
+export async function fetchWikiArticle(slug: string): Promise<{ title: string; slug: string; content: string; section: string; token_estimate: number }> {
+  return apiFetch(`/v1/code/wiki/${encodeURIComponent(slug)}`);
+}
