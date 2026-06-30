@@ -6,6 +6,7 @@ Dashboard: http://100.93.75.87:7777/
 """
 
 import asyncio
+import os
 from typing import Optional, Dict, Any
 import hashlib
 import hmac
@@ -375,6 +376,16 @@ async def lifespan(app: FastAPI):
 
     await _run_migrations()
     await _ensure_global_agent()
+    # Auto-register the nexus-self repo on first boot so the code
+    # index is queryable immediately.  No-op if the path is missing.
+    try:
+        if os.path.isdir("/app"):
+            from app.code.indexer import get_or_create_repo
+            from app.db import SessionLocal
+            async with SessionLocal() as db:
+                await get_or_create_repo(db, "nexus-self", "/app", "system")
+    except Exception as e:
+        log.debug("auto-register nexus-self skipped: %s", e)
 
     redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
     app.state.redis = redis_client
