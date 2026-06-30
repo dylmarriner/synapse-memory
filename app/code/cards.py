@@ -116,9 +116,25 @@ async def search_symbols(
     db: AsyncSession, repo_id: str, query: str, limit: int = 20,
     kind: Optional[str] = None
 ) -> List[Dict[str, Any]]:
-    """BM25-ish search by name + qualified_name, plus trigram fuzzy."""
-    params: Dict[str, Any] = {"rid": repo_id, "q": f"%{query}%", "limit": limit}
+    """BM25-ish search by name + qualified_name, plus trigram fuzzy.
+
+    The query is tokenized on whitespace and we OR-match across tokens
+    so a question like "Show me the code for LivingMind.think" still
+    finds `LivingMind.think` even though the full string doesn't
+    appear in any symbol.
+    """
+    import re
+    tokens = [t for t in re.split(r"\W+", query) if len(t) >= 2][:8]
+    if not tokens:
+        return []
+    # Build OR-of-ILIKE across the name + qualified_name columns
+    or_clauses: List[str] = []
+    for i, tok in enumerate(tokens):
+        or_clauses.append(f"(s.name ILIKE :t{i} OR s.qualified_name ILIKE :t{i})")
     where_kind = "AND s.kind = :kind" if kind else ""
+    params: Dict[str, Any] = {"rid": repo_id, "limit": limit}
+    for i, tok in enumerate(tokens):
+        params[f"t{i}"] = f"%{tok}%"
     if kind:
         params["kind"] = kind
     rows = (await db.execute(text(f"""
@@ -127,7 +143,7 @@ async def search_symbols(
         FROM code_symbols s
         JOIN code_files f ON f.id = s.file_id
         WHERE s.repo_id = :rid
-          AND (s.name ILIKE :q OR s.qualified_name ILIKE :q)
+          AND ({" OR ".join(or_clauses)})
           {where_kind}
         ORDER BY s.qualified_name
         LIMIT :limit
