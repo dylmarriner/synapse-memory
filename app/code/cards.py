@@ -187,11 +187,11 @@ async def iris_gate(
     bytes_used = len(str(card))
     if rung >= 3:
         src = await get_source_snippet(db, repo_id or "", symbol, max_lines=80)
-            if src:
-                card["source_snippet"] = src
-                bytes_used += len(src)
-        if rung >= 4:
-            if not justification:
+        if src:
+            card["source_snippet"] = src
+            bytes_used += len(src)
+    if rung >= 4:
+        if not justification:
                 return {
                     "rung": rung, "error": "rung 4 (full source) requires justification",
                     "card": card,
