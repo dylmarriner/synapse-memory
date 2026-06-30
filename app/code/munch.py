@@ -144,7 +144,7 @@ def decode_records(blob: str) -> List[Dict[str, str]]:
         else:
             col_names.append(c)
     prefixes = {}
-    for p in pref_str.split(";") if pref_str else []:
+    for p in prefixes_str.split(";") if prefixes_str else []:
         if "=" in p:
             h, path = p.split("=", 1)
             prefixes[h] = path
