@@ -5,7 +5,7 @@
 #
 # Install: see evals/install-nexus-sync.sh
 
-set -uo pipefail
+set -o pipefail
 
 NEXUS_URL="${NEXUS_URL:-http://100.93.75.87:7777}"
 NEXUS_SECRET="${NEXUS_SECRET:-nexus-memory-shared-key-2026}"
@@ -43,6 +43,10 @@ fi
 
 echo "$(date -Iseconds) changes detected — pushing to Nexus"
 
+# Find machine metadata first so the RTK event can reference it.
+hostname_short="${HOSTNAME_SHORT:-$(hostname -s)}"
+tailscale_ip=$(tailscale ip -4 2>/dev/null | head -1 || echo "")
+
 # Record RTK event (saves tokens-by-not-printing-raw-output).
 rtk_resp=$(curl -s -X POST "${NEXUS_URL}/v1/rtk/events" \
   -H "Authorization: Bearer ${NEXUS_SECRET}" \
@@ -67,10 +71,6 @@ print(json.dumps({
 if [ -z "$rtk_resp" ] || ! echo "$rtk_resp" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('recorded')" 2>/dev/null; then
   echo "  ! rtk event failed: $rtk_resp"
 fi
-
-# Find machine metadata
-hostname_short="${HOSTNAME_SHORT:-$(hostname -s)}"
-tailscale_ip=$(tailscale ip -4 2>/dev/null | head -1 || echo "")
 
 pushed=0
 failed=0
