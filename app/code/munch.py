@@ -123,10 +123,17 @@ def decode_records(blob: str) -> List[Dict[str, str]]:
     if not lines or not lines[0].startswith("MUNCH|"):
         raise ValueError("not a MUNCH blob")
     header, body = lines[0], lines[1] if len(lines) > 1 else ""
-    parts = header.split("|")
-    # parts[0] = "MUNCH", parts[1] = "cols=...", parts[2] = "prefixes=..."
-    cols_str = parts[1].split("=", 1)[1] if "=" in parts[1] else ""
-    cols = cols_str.split("|")
+    # Header format: "MUNCH|cols=<col1>|<col2>|...|prefixes=<p1>;<p2>|body="
+    # The col names use single-letter tags.  Parse the cols section by
+    # finding the 'cols=' prefix and stopping at the next known section.
+    cols_str = ""
+    prefixes_str = ""
+    for part in header.split("|"):
+        if part.startswith("cols="):
+            cols_str = part[len("cols="):]
+        elif part.startswith("prefixes="):
+            prefixes_str = part[len("prefixes="):]
+    cols = cols_str.split("|") if cols_str else []
     col_names = []
     for c in cols:
         # reverse-lookup
