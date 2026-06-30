@@ -387,6 +387,7 @@ class LivingMind:
                 ),
             )
 
+        log.info("mind.think returning: code_symbols=%d", len(code_symbols))
         return MindResponse(
             answer=answer,
             reasoning_trace=reasoning,
