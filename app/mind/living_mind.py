@@ -199,15 +199,15 @@ class LivingMind:
                 rows = decode_records(data["blob"])
                 return [
                     {
-                        "id": r.get("i", ""),
-                        "qualified_name": r.get("q", ""),
-                        "kind": r.get("k", ""),
-                        "path": r.get("f", ""),
-                        "start_line": r.get("s", ""),
-                        "end_line": r.get("e", ""),
-                        "docstring": r.get("d", ""),
+                        "id": row.get("i", ""),
+                        "qualified_name": row.get("q", ""),
+                        "kind": row.get("k", ""),
+                        "path": row.get("f", ""),
+                        "start_line": row.get("s", ""),
+                        "end_line": row.get("e", ""),
+                        "docstring": row.get("d", ""),
                     }
-                    for r in rows
+                    for row in rows
                 ]
             return data.get("symbols", [])
         except Exception as e:
@@ -387,7 +387,6 @@ class LivingMind:
                 ),
             )
 
-        log.info("mind.think returning: code_symbols=%d", len(code_symbols))
         return MindResponse(
             answer=answer,
             reasoning_trace=reasoning,
