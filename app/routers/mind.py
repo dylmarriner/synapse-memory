@@ -213,19 +213,39 @@ class EndConversationRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.post("/think", response_model=ThinkResponse)
-async def think(body: ThinkRequest):
-    """Ask the living mind a question and get a reasoned response."""
+async def think(
+    body: ThinkRequest,
+    fmt: str = Query("json", pattern="^(json|compact)$"),
+):
+    """Ask the living mind a question and get a reasoned response.
+
+    Add `?fmt=compact` to get the MUNCH-encoded memories_cited list
+    (path-interned, CSV-tagged).  The answer/opinions/proactive blocks
+    are kept as JSON since they're not list-heavy.
+    """
     mind = _get_mind(body.mind_id)
     response = await mind.think(
         question=body.question,
         context=body.context or {},
         reasoning_depth=body.reasoning_depth,
     )
-    return _mind_response_to_dict(response)
+    result = _mind_response_to_dict(response)
+    if fmt == "compact":
+        from app.code.munch import encode_records
+        cited = result.get("memories_cited", [])
+        if cited:
+            result["memories_cited_munch"] = encode_records(
+                [{"id": m.get("id", ""), "content": m.get("content", "")[:300]} for m in cited],
+                ["id", "content"],
+            )
+    return result
 
 
 @router.post("/reflect", response_model=ThinkResponse)
-async def reflect(body: ReflectRequest):
+async def reflect(
+    body: ReflectRequest,
+    fmt: str = Query("json", pattern="^(json|compact)$"),
+):
     """Deep reflection on a topic.  Synthesises many memories into a
     single coherent narrative."""
     mind = _get_mind(body.mind_id)

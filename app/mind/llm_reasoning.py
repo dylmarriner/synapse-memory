@@ -443,17 +443,22 @@ async def llm_reason(
     max_memories: int = 16,
     depth: str = "standard",
     pre_extracted_claims: Optional[List[Dict[str, Any]]] = None,
+    code_symbols: Optional[List[Dict[str, Any]]] = None,
 ) -> LLMReasoningResult:
     """Reason over `memories` and answer `question`.
 
     At `standard` and `deep` depths, memories are formatted with full
     metadata (date, importance, related).  At `fast` depth, a one-line
     brief is used for speed.
+
+    `code_symbols` (optional): symbol cards from the code index, for
+    when the question is about "how does X work".  Each card contributes
+    ~100 tokens of dense structure.
     """
     if not is_llm_available(llm_client):
         return LLMReasoningResult(error="llm_unavailable")
 
-    if not memories and not pre_extracted_claims:
+    if not memories and not pre_extracted_claims and not code_symbols:
         return LLMReasoningResult(error="no_memories")
 
     mem_ids = [m.get("id", "") for m in memories[:max_memories]]
@@ -476,6 +481,19 @@ async def llm_reason(
             ev = ", ".join(c.get("evidence", []))
             claim_lines.append(f"- (weight {c.get('weight', 0.5):.2f}) {c['text']}  [ev: {ev}]")
         user_parts.append("Relevant claims (pre-extracted):\n" + "\n".join(claim_lines))
+    if code_symbols:
+        sym_lines = []
+        for s in code_symbols[:5]:
+            kind = s.get("kind", "symbol")
+            qn = s.get("qualified_name", "")
+            sig = s.get("signature", "")
+            path = s.get("location", {}).get("path", "")
+            line = s.get("location", {}).get("start_line", "?")
+            sym_lines.append(f"- [{kind}] `{qn}` @ {path}:{line} — {sig[:120]}")
+        if sym_lines:
+            user_parts.append(
+                "Code symbols (from code-context index):\n" + "\n".join(sym_lines)
+            )
     user_parts.append("Memories:\n" + mem_block)
     user_msg = "\n\n".join(user_parts)
 
@@ -714,6 +732,7 @@ async def run_pipeline(
     max_memories: int = 16,
     related_lookup: Optional[Dict[str, List[str]]] = None,
     recent_activity: Optional[List[Dict[str, Any]]] = None,
+    code_symbols: Optional[List[Dict[str, Any]]] = None,
     timeout_extract: int = 45,
     timeout_reason: int = 60,
     timeout_verify: int = 45,
@@ -755,6 +774,7 @@ async def run_pipeline(
         model=primary_model, timeout=timeout_reason,
         max_memories=max_memories, depth=depth,
         pre_extracted_claims=pre_extracted_claims,
+        code_symbols=code_symbols,
     )
     steps_run.append("reason:primary" if not reason_result.error else f"reason:err({reason_result.error})")
     reason_result.claims = pre_extracted_claims or []
@@ -767,6 +787,7 @@ async def run_pipeline(
             model=fallback_model, timeout=timeout_reason,
             max_memories=max_memories, depth=depth,
             pre_extracted_claims=pre_extracted_claims,
+            code_symbols=code_symbols,
         )
         if fallback_result.answer and not fallback_result.error:
             reason_result = fallback_result

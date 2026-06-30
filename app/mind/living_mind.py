@@ -52,6 +52,7 @@ class MindResponse:
     proactive_context: List[ProactiveItem] = field(default_factory=list)
     memories_cited: List[Dict[str, Any]] = field(default_factory=list)
     opinions_expressed: List[Opinion] = field(default_factory=list)
+    code_symbols: List[Dict[str, Any]] = field(default_factory=list)  # code-context symbols used
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -63,6 +64,7 @@ class MindResponse:
             "proactive_context": [item.to_dict() for item in self.proactive_context],
             "memories_cited": self.memories_cited,
             "opinions_expressed": [op.to_dict() for op in self.opinions_expressed],
+            "code_symbols": self.code_symbols,
             "metadata": self.metadata,
         }
 
@@ -85,6 +87,31 @@ class MindConfig:
     enable_llm_proactive: bool = True       # LLM-driven proactive surfacing (vs deterministic only)
     enable_llm_opinion: bool = True         # LLM-driven opinion formation (vs deterministic only)
     enable_related_graph: bool = True       # expand context with graph-related memories
+
+
+# ── Code-context question detection ─────────────────────────────────────
+
+_CODE_QUESTION_PATTERNS = (
+    "how does", "how do", "show me", "show code", "where is", "where can",
+    "find the", "find code", "implement", "function", "method", "class",
+    "endpoint", "router", "schema", "model", "config", "what is the",
+    "explain the code", "code for", "source of", "implementation of",
+    "logic for", "logic in", "defined", "lives in", "lives at",
+)
+
+
+def _looks_like_code_question(question: str) -> bool:
+    """Cheap heuristic: question mentions code-shaped concepts."""
+    q = question.lower().strip()
+    if not q:
+        return False
+    if any(pat in q for pat in _CODE_QUESTION_PATTERNS):
+        return True
+    # CamelCase or snake_case token (e.g. "LivingMind.think", "search_symbols")
+    if any("." in t and t.replace(".", "").replace("_", "").isalnum()
+           for t in q.split()):
+        return True
+    return False
 
 
 class LivingMind:
@@ -136,6 +163,38 @@ class LivingMind:
                  bool(llm_client), bool(llm_fallback))
 
     # ------------------------------------------------------------------
+    # Code-context integration
+    # ------------------------------------------------------------------
+    async def _code_search(self, question: str, limit: int = 5) -> List[Dict[str, Any]]:
+        """Query the code index for symbols matching the question.
+
+        Uses the same /v1/code/search endpoint the dashboard uses.
+        Falls back to an empty list if the code index isn't reachable
+        or no symbols are registered.
+        """
+        try:
+            import os
+            import aiohttp
+            nexus_url = os.environ.get("NEXUS_INTERNAL_URL", "http://127.0.0.1:7777")
+            secret = os.environ.get("NEXUS_SECRET", "")
+            if not secret:
+                return []
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{nexus_url}/v1/code/search",
+                    params={"q": question, "limit": str(limit)},
+                    headers={"Authorization": f"Bearer {secret}"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as r:
+                    if r.status != 200:
+                        return []
+                    data = await r.json()
+            return data.get("symbols", [])
+        except Exception as e:
+            log.debug("code search failed: %s", e)
+            return []
+
+    # ------------------------------------------------------------------
     # Core reasoning
     # ------------------------------------------------------------------
 
@@ -173,6 +232,17 @@ class LivingMind:
         related_lookup: Dict[str, List[str]] = {}
         if self.config.enable_related_graph and memories:
             related_lookup = await self._expand_via_graph(memories)
+
+        # Step 1c: Code-context integration.  If the question is about
+        # "how does X work" or "show me the code for Y", query the code
+        # index and inject symbol cards into the LLM prompt.  The cards
+        # ride alongside the memories — the LLM uses whichever fits.
+        code_symbols: List[Dict[str, Any]] = []
+        if _looks_like_code_question(question):
+            code_symbols = await self._code_search(question, limit=5)
+            if code_symbols:
+                log.info("code-context: %d symbols injected for %r",
+                         len(code_symbols), question[:60])
 
         # Step 2: Decide whether we need to ask for clarification
         if self._needs_clarification(question, memories):
@@ -219,6 +289,7 @@ class LivingMind:
                         enable_opinion_llm=self.config.enable_llm_opinion,
                         max_memories=self.config.max_memories,
                         related_lookup=related_lookup,
+                        code_symbols=code_symbols,
                     )
                     llm_result = llm_pipeline_result.get("reason")
                     if llm_result is not None and not llm_result.error and llm_result.answer:
@@ -303,6 +374,7 @@ class LivingMind:
             proactive_context=proactive,
             memories_cited=memories,
             opinions_expressed=opinions,
+            code_symbols=code_symbols,
         )
 
     async def reflect(

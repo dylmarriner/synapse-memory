@@ -6,7 +6,7 @@ Dashboard: http://100.93.75.87:7777/
 """
 
 import asyncio
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 import hashlib
 import hmac
 import logging
@@ -402,24 +402,11 @@ async def lifespan(app: FastAPI):
     push_task = asyncio.create_task(push_daemon.start())
     log.info("Active memory push daemon started")
 
-    # Start the inotify-based code watcher (re-indexes when files change)
-    watcher_task: Optional[asyncio.Task] = None
-    try:
-        import os
-        if os.path.isdir("/app"):
-            from app.code.watcher import InotifyCodeWatcher
-            watcher = InotifyCodeWatcher(
-                repo_name="nexus-self",
-                root_path="/app",
-                nexus_url=f"http://127.0.0.1:{settings.nexus_port}",
-                nexus_secret=settings.nexus_secret,
-            )
-            watcher_task = asyncio.create_task(watcher.run())
-            log.info("Code watcher started (inotify on /app)")
-        else:
-            log.debug("/app not present; code watcher not started")
-    except Exception as e:
-        log.debug("code watcher not started: %s", e)
+    # Note: the code-context inotify watcher lives in the host (see
+    # scripts/nexus-code-watch.sh) because the container's /app is a
+    # read-only bind mount. We don't start the watcher inside the
+    # container because inotify wouldn't see host-side writes through a
+    # :ro bind.
 
     log.info("Nexus ready — REST: /v1  MCP: /mcp  Dashboard: /")
     yield
@@ -429,8 +416,6 @@ async def lifespan(app: FastAPI):
     scheduler_task.cancel()
     push_daemon.stop()
     push_task.cancel()
-    if watcher_task is not None:
-        watcher_task.cancel()
     await redis_client.aclose()
     await engine.dispose()
     log.info("Nexus stopped")
