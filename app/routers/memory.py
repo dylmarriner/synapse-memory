@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import time
-from typing import List, Optional
+from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
 
