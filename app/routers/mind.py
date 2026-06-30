@@ -528,9 +528,10 @@ def _mind_response_to_dict(response: MindResponse) -> Dict[str, Any]:
     return {
         "answer": response.answer,
         "clarifying_question": response.clarifying_question,
-        "confidence": response.confidence,
-        "memories_cited": response.memories_cited,
-        "proactive_context": [item.to_dict() for item in response.proactive_context],
-        "opinions_expressed": [op.to_dict() for op in response.opinions_expressed],
         "reasoning_trace": response.reasoning_trace.to_dict() if response.reasoning_trace else None,
+        "confidence": response.confidence,
+        "proactive_context": [item.to_dict() for item in response.proactive_context],
+        "memories_cited": response.memories_cited,
+        "opinions_expressed": [op.to_dict() for op in response.opinions_expressed],
+        "code_symbols": response.code_symbols,
     }
