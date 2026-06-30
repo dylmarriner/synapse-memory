@@ -475,39 +475,55 @@ def extract_symbols(path: Path, content: str, language: Optional[str] = None) ->
 # ── Edge extraction (calls + imports) ────────────────────────────────────
 
 def extract_edges_from_python(content: str, file_symbols: List[ExtractedSymbol], src_file_id: str) -> List[ExtractedEdge]:
+    """Walk the AST and produce edges with src_symbol_id resolved to the
+    symbol containing the call site (based on line numbers)."""
     edges: List[ExtractedEdge] = []
+    if not file_symbols:
+        return edges
     symbol_names = {s.name for s in file_symbols}
-    qualified_set = {s.qualified_name for s in file_symbols}
+    # Build a quick lookup: line -> enclosing symbol
+    def _enclosing_symbol(line: int) -> Optional[ExtractedSymbol]:
+        # The deepest symbol whose [start_line, end_line] contains the line
+        best: Optional[ExtractedSymbol] = None
+        best_size = float("inf")
+        for s in file_symbols:
+            if s.start_line <= line <= s.end_line:
+                size = s.end_line - s.start_line
+                if size < best_size:
+                    best = s
+                    best_size = size
+        return best
+
     try:
         tree = ast.parse(content)
     except SyntaxError:
         return edges
-    src_id_by_qn = {s.qualified_name: None for s in file_symbols}  # filled by caller
 
     def visit(node: ast.AST, in_symbol: Optional[str] = None) -> None:
-        # Track which symbol each call lives in
+        # Determine which symbol this subtree is in.
         cur_sym = in_symbol
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            cur_sym = node.name  # best-effort
-        elif isinstance(node, ast.ClassDef):
-            cur_sym = node.name
+        node_line = getattr(node, "lineno", None) or 0
+        if node_line:
+            enc = _enclosing_symbol(node_line)
+            if enc is not None:
+                cur_sym = enc.qualified_name
         for child in ast.iter_child_nodes(node):
             if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
                 target = child.func.id
                 edges.append(ExtractedEdge(
-                    src_symbol_id=None,  # resolved by caller
+                    src_symbol_id=cur_sym,  # resolved
                     src_file_id=src_file_id,
                     dst_symbol_id=None,
                     dst_name=target,
                     kind="call",
                     line=child.lineno,
-                    confidence=0.7 if target in symbol_names else 0.3,
+                    confidence=0.8 if target in symbol_names else 0.3,
                 ))
             elif isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute):
-                # foo.bar() — call to bar on foo
                 target = child.func.attr
                 edges.append(ExtractedEdge(
-                    src_symbol_id=None, src_file_id=src_file_id,
+                    src_symbol_id=cur_sym,
+                    src_file_id=src_file_id,
                     dst_symbol_id=None, dst_name=target, kind="call",
                     line=child.lineno, confidence=0.5,
                 ))
@@ -515,14 +531,14 @@ def extract_edges_from_python(content: str, file_symbols: List[ExtractedSymbol],
                 if isinstance(child, ast.Import):
                     for alias in child.names:
                         edges.append(ExtractedEdge(
-                            src_symbol_id=None, src_file_id=src_file_id,
+                            src_symbol_id=cur_sym, src_file_id=src_file_id,
                             dst_symbol_id=None, dst_name=alias.name,
                             kind="import", line=child.lineno, confidence=1.0,
                         ))
                 elif isinstance(child, ast.ImportFrom) and child.module:
                     for alias in child.names:
                         edges.append(ExtractedEdge(
-                            src_symbol_id=None, src_file_id=src_file_id,
+                            src_symbol_id=cur_sym, src_file_id=src_file_id,
                             dst_symbol_id=None, dst_name=child.module + "." + alias.name,
                             kind="import", line=child.lineno, confidence=1.0,
                         ))
@@ -624,16 +640,19 @@ class Indexer:
             if "." in s.qualified_name:
                 parent_id_by_name[s.qualified_name.rsplit(".", 1)[1]] = sid
             await self._insert_symbol(sid, file_id, s, content)
-        # Insert edges, resolve src to symbol if possible
+        # Insert edges, resolve src and dst to UUIDs via sym_id_by_qn
         for e in edges:
-            src_id = None
-            for qn, sid in sym_id_by_qn.items():
-                leaf = qn.rsplit(".", 1)[-1]
-                if leaf == e.dst_name and line_in_symbol(e.line, sym_id_by_qn, symbols):
-                    src_id = sid
-                    break
-            # Try to resolve dst to a known symbol
+            # src_symbol_id is now a qualified_name from the edge extractor
+            src_id = sym_id_by_qn.get(e.src_symbol_id) if e.src_symbol_id else None
+            # dst_name: if it matches a known symbol in this file, resolve
+            # first try exact qualified-name match
             dst_id = sym_id_by_qn.get(e.dst_name)
+            if dst_id is None:
+                # fall back to leaf-name match (e.g. "foo" matches "Class.foo")
+                for qn, sid in sym_id_by_qn.items():
+                    if qn.rsplit(".", 1)[-1] == e.dst_name:
+                        dst_id = sid
+                        break
             await self._insert_edge(src_id, file_id, dst_id, e)
         return {"file_id": str(file_id), "symbols": len(symbols), "edges": len(edges)}
 
