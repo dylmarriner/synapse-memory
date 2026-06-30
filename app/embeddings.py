@@ -53,8 +53,8 @@ async def _get_redis():
     global _redis
     if _redis is None:
         try:
-            import redis.asyncio as aioredis
-            _redis = aioredis.from_url(settings.redis_url, socket_connect_timeout=2)
+            from app.redis_util import make_redis
+            _redis = make_redis(socket_connect_timeout=2)
         except Exception:
             pass
     return _redis

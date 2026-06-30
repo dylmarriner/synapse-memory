@@ -7,6 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.api import MemoryResult
+from app.db import is_sqlite
 
 log = logging.getLogger("nexus.search.lexical")
 
@@ -20,11 +21,13 @@ async def lexical_search(
 ) -> List[MemoryResult]:
     """PostgreSQL tsvector full-text search."""
     conditions = [
+        "LOWER(content) LIKE :query_like" if is_sqlite() else
         "to_tsvector('english', content) @@ plainto_tsquery('english', :query)",
         "superseded_by IS NULL",
+        "(valid_until IS NULL OR valid_until > CURRENT_TIMESTAMP)" if is_sqlite() else
         "(valid_until IS NULL OR valid_until > NOW())",
     ]
-    params: dict = {"query": query, "limit": limit}
+    params: dict = {"query": query, "query_like": f"%{query.lower()}%", "limit": limit}
 
     if agent_id:
         # Include both the agent's own memories and any global shared memories.
@@ -34,14 +37,22 @@ async def lexical_search(
         params["agent_name"] = agent_id
 
     if memory_types:
-        conditions.append("memory_type = ANY(:types)")
-        params["types"] = memory_types
+        if is_sqlite():
+            slots = ", ".join(f":type{i}" for i in range(len(memory_types)))
+            conditions.append(f"memory_type IN ({slots})")
+            params.update({f"type{i}": value for i, value in enumerate(memory_types)})
+        else:
+            conditions.append("memory_type = ANY(:types)")
+            params["types"] = memory_types
 
     where = " AND ".join(conditions)
+    score_expr = ("CASE WHEN LOWER(content) = LOWER(:query) THEN 1.0 ELSE 0.5 END"
+                  if is_sqlite() else
+                  "ts_rank(to_tsvector('english', content), plainto_tsquery('english', :query))")
     sql = text(f"""
         SELECT id, content, memory_type, agent_id, importance, access_count, created_at, metadata,
                confidence, valid_from, valid_until, extraction_model,
-               ts_rank(to_tsvector('english', content), plainto_tsquery('english', :query)) AS score
+               {score_expr} AS score
         FROM memories
         WHERE {where}
         ORDER BY score DESC

@@ -2,6 +2,26 @@
 
 **Effort level:** medium — balanced approach with standard implementation and testing
 
+## Status (2026-07-01)
+
+All 12 items are now implemented. Notes:
+
+- **Items 1–8, 10, 11** — complete.
+- **Item 11 (Quality dashboard)** — endpoint `GET /v1/admin/memory-quality` was
+  already present; the dashboard **Memory Quality** tab is now wired in
+  `app/main.py` (`◍ Memory Quality`).
+- **Item 12 (Federation)** — implemented as a pull-based first cut:
+  `app/federation.py` + `app/routers/federation.py`, endpoints
+  `/v1/federation/{hello,pull,push}`, HMAC-SHA256 auth via `X-Federation-Signature`,
+  idempotent upsert keyed by memory `id`, last-writer-wins by `(version, created_at)`.
+  Embeddings are **not** synced — each node re-embeds locally. Gated by
+  `FEDERATION_ENABLED`; peers/secret via `.env`.
+- **Item 9 (Embedded mode)** — delivered as `nexus start [--embedded|--full]`
+  (`nexus/cli.py`, packaged via `pyproject.toml` console script). Embedded mode
+  uses SQLite, an **in-process worker + fakeredis** (`app/redis_util.py`),
+  sqlite-safe ORM schema creation, SQL lexical fallback, and in-process cosine
+  vector ranking. No Postgres, Redis container, or separate worker is needed.
+
 ## Goal
 Implement all features needed to dominate BrainSync, AgentMemory, Hindsight, Honcho, Mem0, Zep/Graphiti, Letta, LangMem, Cognee, and EverOS across architecture, benchmarks, DX, and observability.
 

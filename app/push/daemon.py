@@ -40,8 +40,9 @@ class PushDaemon:
     async def start(self):
         self._running = True
         # Dedicated connection for blocking xreadgroup — socket_timeout=None required
-        self._redis = aioredis.from_url(
-            settings.redis_url, decode_responses=True,
+        from app.redis_util import make_redis
+        self._redis = make_redis(
+            decode_responses=True,
             socket_timeout=None, socket_connect_timeout=5.0,
         )
         await self._ensure_stream()
