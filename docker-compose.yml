@@ -61,6 +61,8 @@ services:
     command:
       - --model
       - /models/active/qwen25-3b-instruct-q4_k_m.gguf
+      - --alias
+      - qwen2.5:3b-instruct
       - --port
       - "11434"
       - --host
