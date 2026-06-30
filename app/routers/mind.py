@@ -525,6 +525,9 @@ async def dashboard(mind_id: str = "default"):
 
 def _mind_response_to_dict(response: MindResponse) -> Dict[str, Any]:
     """Convert a MindResponse to the API shape."""
+    import logging
+    log = logging.getLogger("nexus.routers.mind")
+    log.info("router._mind_response_to_dict: code_symbols=%d", len(response.code_symbols or []))
     return {
         "answer": response.answer,
         "clarifying_question": response.clarifying_question,
