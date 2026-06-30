@@ -12,6 +12,11 @@ openai>=1.30
 
 fastembed>=0.5.0
 
+# Code-context: tree-sitter for symbol extraction (Python .py uses stdlib ast;
+# JS/TS/Go/Rust/TSX use tree-sitter-languages for AST parsing).
+tree-sitter>=0.21
+tree-sitter-languages>=1.10
+
 # Optional: local cross-encoder reranker (RERANKER_PROVIDER=local)
 # sentence-transformers>=3.0
 
