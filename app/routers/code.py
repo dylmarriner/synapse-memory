@@ -78,13 +78,22 @@ async def list_repos(db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
 async def search_symbols(
     repo_id: Optional[str] = None, q: str = Query(..., min_length=1),
     kind: Optional[str] = None, limit: int = Query(20, le=100),
+    fmt: str = Query("auto", pattern="^(auto|json|compact)$"),
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
-    """Search symbols by name.  BM25-ish + trigram fuzzy."""
+    """Search symbols by name.  BM25-ish + trigram fuzzy.
+
+    Add `?fmt=compact` to get the MUNCH compact wire format (path-
+    interned, CSV-tagged).  Add `?fmt=json` to force verbose JSON.
+    Default `auto` uses compact when savings >= 15%."""
+    from app.code.munch import serialize_code_search
     if repo_id is None:
         repo_id = await _default_repo(db)
     syms = await C.search_symbols(db, repo_id, q, limit, kind)
-    return {"repo_id": repo_id, "query": q, "symbols": syms, "count": len(syms)}
+    return serialize_code_search(
+        {"repo_id": repo_id, "query": q, "symbols": syms, "count": len(syms)},
+        fmt=fmt,
+    )
 
 
 @router.get("/symbol/{qualified_name:path}")
@@ -127,11 +136,16 @@ async def iris_gate(
 
 
 @router.post("/blast")
-async def blast(body: BlastRequest, repo_id: Optional[str] = None, db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+async def blast(
+    body: BlastRequest, fmt: str = Query("auto", pattern="^(auto|json|compact)$"),
+    repo_id: Optional[str] = None, db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
     """Blast radius: BFS through code_edges from a target symbol or file."""
+    from app.code.munch import serialize_blast
     if repo_id is None:
         repo_id = await _default_repo(db)
-    return await C.blast_radius(db, repo_id, body.target, body.depth)
+    result = await C.blast_radius(db, repo_id, body.target, body.depth)
+    return serialize_blast(result, fmt=fmt)
 
 
 @router.get("/file/outline")
@@ -160,13 +174,19 @@ async def generate_wiki(
 
 @router.get("/wiki")
 async def wiki_index(
-    repo_id: Optional[str] = None, db: AsyncSession = Depends(get_db)
+    repo_id: Optional[str] = None,
+    fmt: str = Query("auto", pattern="^(auto|json|compact)$"),
+    db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """Compact catalog (~200 tokens) of all wiki articles."""
+    from app.code.munch import serialize_wiki_index
     if repo_id is None:
         repo_id = await _default_repo(db)
     articles = await C.list_wiki_index(db, repo_id)
-    return {"repo_id": repo_id, "articles": articles, "count": len(articles)}
+    return serialize_wiki_index(
+        {"repo_id": repo_id, "articles": articles, "count": len(articles)},
+        fmt=fmt,
+    )
 
 
 @router.get("/wiki/{slug}")

@@ -16,6 +16,8 @@ fastembed>=0.5.0
 # JS/TS/Go/Rust/TSX use tree-sitter-languages for AST parsing).
 tree-sitter>=0.21
 tree-sitter-languages>=1.10
+inotify_simple>=2.0  # real-time file-change watcher for the indexer
+aiohttp>=3.9  # async HTTP client used by the code watcher
 
 # Optional: local cross-encoder reranker (RERANKER_PROVIDER=local)
 # sentence-transformers>=3.0

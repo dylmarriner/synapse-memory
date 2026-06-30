@@ -437,3 +437,42 @@ async def delete_memory(memory_id: str, db: AsyncSession = Depends(get_db)):
     if not row:
         raise HTTPException(status_code=404, detail="Memory not found")
     return {"deleted": str(row.id)}
+
+
+# ── Memory Iris Gate ────────────────────────────────────────────────────
+
+class MemoryIrisRequest(BaseModel):
+    query: Optional[str] = None
+    agent_id: Optional[str] = None
+    layer: Optional[str] = None  # L1/L2/L3
+    rung: int = Field(2, ge=1, le=4)
+    justification: Optional[str] = None
+    limit: int = Field(50, le=500)
+    memory_ids: Optional[List[str]] = None
+
+
+@router.post("/iris")
+async def memory_iris_gate(
+    body: MemoryIrisRequest, db: AsyncSession = Depends(get_db)
+) -> Dict[str, Any]:
+    """Memory Iris Gate — 4-rung context escalation for memories.
+
+    Rungs:
+      1 - count only
+      2 - metadata: id, type, importance, agent
+      3 - summary: metadata + first 200 chars of content
+      4 - full: complete content (requires justification)
+    """
+    from app.memory.iris import memory_iris
+    if body.rung == 4 and not body.justification:
+        raise HTTPException(400, "rung 4 (full content) requires justification")
+    return await memory_iris(
+        db,
+        query=body.query,
+        agent_id=body.agent_id,
+        layer=body.layer,
+        rung=body.rung,
+        justification=body.justification,
+        limit=body.limit,
+        memory_ids=body.memory_ids,
+    )
