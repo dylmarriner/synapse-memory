@@ -61,6 +61,7 @@ from app.routers.graph import router as graph_router
 from app.routers.hooks import router as hooks_router
 from app.routers.adopted import router as adopted_router
 from app.routers.mind import router as mind_router
+from app.routers.layers import router as layers_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -468,6 +469,7 @@ app.include_router(graph_router,  prefix="/v1",        tags=["graph"],   depende
 app.include_router(hooks_router,  prefix="/v1/hooks",  tags=["hooks"],   dependencies=[Depends(_verify_key)])
 app.include_router(adopted_router,                     tags=["adopted"], dependencies=[Depends(_verify_key)])
 app.include_router(mind_router,                        tags=["mind"],    dependencies=[Depends(_verify_key)])
+app.include_router(layers_router, prefix="/v1/layer",  tags=["layers"], dependencies=[Depends(_verify_key)])
 
 
 # Serve the built React/Vite dashboard at /app (when present).  The bundle is
