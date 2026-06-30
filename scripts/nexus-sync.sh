@@ -74,6 +74,8 @@ print(json.dumps({
   'metadata': {
     'source_path': '${path}',
     'hostname': '${hostname_short}',
+    'device': '${hostname_short}',
+    'model': 'auto-sync/$(date +%Y%m%d)',
     'tailscale_ip': '${tailscale_ip}',
     'sync_version': '$(date +%Y%m%d-%H%M%S)',
   }
