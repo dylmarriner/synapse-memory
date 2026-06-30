@@ -171,10 +171,15 @@ class LivingMind:
         Uses the same /v1/code/search endpoint the dashboard uses.
         Falls back to an empty list if the code index isn't reachable
         or no symbols are registered.
+
+        Handles both the verbose JSON form and the MUNCH compact form.
+        In the MUNCH form the data is inside the `blob` field; we
+        decode it back to records so the LLM can read the symbols.
         """
         try:
             import os
             import aiohttp
+            from app.code.munch import decode_records
             nexus_url = os.environ.get("NEXUS_INTERNAL_URL", "http://127.0.0.1:7777")
             secret = os.environ.get("NEXUS_SECRET", "")
             if not secret:
@@ -182,13 +187,28 @@ class LivingMind:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{nexus_url}/v1/code/search",
-                    params={"q": question, "limit": str(limit)},
+                    params={"q": question, "limit": str(limit), "fmt": "compact"},
                     headers={"Authorization": f"Bearer {secret}"},
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as r:
                     if r.status != 200:
                         return []
                     data = await r.json()
+            # MUNCH form: decode the blob; otherwise use the symbols array
+            if data.get("format") == "munch" and data.get("blob"):
+                rows = decode_records(data["blob"])
+                return [
+                    {
+                        "id": r.get("i", ""),
+                        "qualified_name": r.get("q", ""),
+                        "kind": r.get("k", ""),
+                        "path": r.get("f", ""),
+                        "start_line": r.get("s", ""),
+                        "end_line": r.get("e", ""),
+                        "docstring": r.get("d", ""),
+                    }
+                    for r in rows
+                ]
             return data.get("symbols", [])
         except Exception as e:
             log.debug("code search failed: %s", e)
