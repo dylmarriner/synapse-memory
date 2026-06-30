@@ -79,6 +79,7 @@ export interface BrowseMemory {
   memory_type: string;
   agent_name: string | null;
   importance: number;
+  confidence: number;
   access_count: number;
   confirmed_count: number;
   contradicted_count: number;

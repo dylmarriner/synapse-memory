@@ -2,35 +2,37 @@ import { lazy, Suspense, useMemo, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import Layout from './components/Layout';
 
-const Overview = lazy(() => import('./pages/Overview'));
-const Vault = lazy(() => import('./pages/Vault'));
-const Mind = lazy(() => import('./pages/Mind'));
-const Connections = lazy(() => import('./pages/Connections'));
+const HUD = lazy(() => import('./pages/HUD'));
+const Constellation = lazy(() => import('./pages/Constellation'));
+const Timeline = lazy(() => import('./pages/Timeline'));
+const Observatory = lazy(() => import('./pages/Observatory'));
+const Lattice = lazy(() => import('./pages/Lattice'));
+const Pulse = lazy(() => import('./pages/Pulse'));
 const Conversations = lazy(() => import('./pages/Conversations'));
-const Activity = lazy(() => import('./pages/Activity'));
+const RecallLab = lazy(() => import('./pages/RecallLab'));
 const Agents = lazy(() => import('./pages/Agents'));
 const Sessions = lazy(() => import('./pages/Sessions'));
-const RecallLab = lazy(() => import('./pages/RecallLab'));
 const Operations = lazy(() => import('./pages/Operations'));
 const Console = lazy(() => import('./pages/Console'));
 
 const PAGES = {
-  overview: Overview,
-  vault: Vault,
-  mind: Mind,
-  connections: Connections,
+  hud: HUD,
+  constellation: Constellation,
+  timeline: Timeline,
+  observatory: Observatory,
+  lattice: Lattice,
+  pulse: Pulse,
   conversations: Conversations,
-  activity: Activity,
+  recalllab: RecallLab,
   agents: Agents,
   sessions: Sessions,
-  recalllab: RecallLab,
   ops: Operations,
   console: Console,
 } satisfies Record<string, React.LazyExoticComponent<React.FC>>;
 
 type PageId = keyof typeof PAGES;
 
-const FALLBACK_PAGE = Overview;
+const FALLBACK_PAGE = HUD;
 
 function isPageId(value: string): value is PageId {
   return value in PAGES;
@@ -38,14 +40,17 @@ function isPageId(value: string): value is PageId {
 
 function PageLoading() {
   return (
-    <div className="flex flex-1 items-center justify-center text-sm uppercase tracking-[.18em] text-[var(--color-dim)]">
-      NEXUS:// loading module…
+    <div className="flex flex-1 items-center justify-center nx-mono text-[.7rem] uppercase tracking-[.32em]" style={{ color: 'var(--color-cyan)' }}>
+      <div className="flex flex-col items-center gap-2">
+        <div className="text-2xl" style={{ animation: 'pulse 1.4s infinite' }}>◈</div>
+        <div>NEXUS:// loading module…</div>
+      </div>
     </div>
   );
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState<PageId>('hud');
   const queryClient = useMemo(
     () => new QueryClient({ defaultOptions: { queries: { retry: 2, staleTime: 5000 } } }),
     [],
@@ -54,7 +59,7 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <Layout activeTab={activeTab} onTabChange={setActiveTab}>
+      <Layout activeTab={activeTab} onTabChange={(t) => setActiveTab(t as PageId)}>
         <Suspense fallback={<PageLoading />}>
           <Page />
         </Suspense>

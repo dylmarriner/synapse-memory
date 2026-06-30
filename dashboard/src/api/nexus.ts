@@ -193,6 +193,14 @@ export async function fetchMindDashboard(mindId = 'default'): Promise<MindDashbo
   return apiFetch<MindDashboardResponse>(`/v1/mind/dashboard?mind_id=${encodeURIComponent(mindId)}`);
 }
 
+export async function fetchMindIdentity(mindId = 'default'): Promise<import('../types/nexus').MindIdentity> {
+  return apiFetch(`/v1/mind/identity/${encodeURIComponent(mindId)}`);
+}
+
+export async function fetchMindOpinions(mindId = 'default'): Promise<{ opinions: import('../types/nexus').MindOpinion[] }> {
+  return apiFetch(`/v1/mind/opinions/${encodeURIComponent(mindId)}`);
+}
+
 export async function mindThink(payload: {
   question: string;
   mind_id?: string;
