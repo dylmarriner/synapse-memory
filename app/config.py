@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     # Living Mind reasoning models.  The mind reasons with a local Ollama model
     # (fast, on-GPU, no API cost) and falls back to a DeepSeek model when the
     # local call fails or returns nothing.
-    mind_llm_model: str = "qwen2.5:7b-instruct-q4_K_M"
+    mind_llm_model: str = "qwen2.5:3b-instruct"
     mind_fallback_model: str = "deepseek-chat"
     ollama_base_url: str = "http://172.20.0.1:11434/v1"
 

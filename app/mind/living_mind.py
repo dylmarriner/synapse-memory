@@ -193,7 +193,11 @@ class LivingMind:
         )
 
         llm_pipeline_result: Optional[Dict[str, Any]] = None
-        if self.llm is not None and depth != ReasoningDepth.FAST:
+        # The LLM is the mind — it runs at every depth.  FAST skips the
+        # heavy extract/verify pre-steps but still goes through the LLM
+        # to generate the actual answer.  Without the LLM at FAST, the
+        # response is just the top recall hit, which is not a mind.
+        if self.llm is not None:
             try:
                 from app.mind.llm_reasoning import (
                     is_llm_available,
@@ -219,6 +223,19 @@ class LivingMind:
                     llm_result = llm_pipeline_result.get("reason")
                     if llm_result is not None and not llm_result.error and llm_result.answer:
                         reasoning = enrich_reasoning_result(reasoning, llm_result)
+                    # Self-repair: if the pipeline flagged a problem, the
+                    # LLM patches memory/mind state and the response surfaces
+                    # what it fixed.  This is the mind keeping itself healthy.
+                    repairs = await self._self_repair(
+                        question=question,
+                        llm_pipeline_result=llm_pipeline_result,
+                        memories=memories,
+                        depth=depth,
+                    )
+                    if repairs:
+                        reasoning.answer = self._merge_repair_answer(
+                            reasoning.answer, repairs
+                        )
             except Exception as e:
                 log.debug("LLM pipeline failed, using deterministic: %s", e)
 
@@ -454,10 +471,170 @@ class LivingMind:
             for item in proactive[:3]:
                 parts.append(f"- {item.content}")
         return "\n".join(p for p in parts if p).strip()
-
     def _compose_reflection(self, reasoning: ReasoningResult, memories: List[Dict[str, Any]]) -> str:
         """Render a reflection as a single coherent narrative paragraph."""
         return reasoning.conclusion or "No reflection available."
+
+    # ── Self-repair ─────────────────────────────────────────────────────────
+    # The LLM is not just an answer machine — it is the mind's immune
+    # system.  When the recall returns nothing, when an LLM call errors,
+    # when claims contradict, or when the agent's environment looks
+    # broken, the mind saves a repair memory and reports what it fixed.
+    # Repairs are durable: they survive restarts and are searchable.
+    async def _self_repair(
+        self,
+        question: str,
+        llm_pipeline_result: Optional[Dict[str, Any]],
+        memories: List[Dict[str, Any]],
+        depth: "ReasoningDepth",
+    ) -> List[str]:
+        """Inspect the LLM pipeline output and the recall set for failure
+        modes, then save repair memories for any that are detected.
+
+        Returns a list of human-readable repair notes (empty if the mind
+        is healthy).  The notes are prepended to the final answer so the
+        user sees what the mind did to keep itself running.
+        """
+        repairs: List[str] = []
+        if not llm_pipeline_result:
+            return repairs
+
+        # 1. Empty recall: the agent asked something the mind has no
+        #    memory of.  Save a marker so the mind knows it has a gap.
+        if not memories:
+            note = await self._save_repair_memory(
+                kind="recall_gap",
+                content=(
+                    f"Recall gap: question '{question[:120]}' returned no "
+                    f"memories.  The mind has no record of this topic yet."
+                ),
+                importance=0.4,
+            )
+            if note:
+                repairs.append(note)
+
+        # 2. LLM errored: the primary model failed.  Note the model
+        #    failure so the next sync can detect a pattern.
+        reason = llm_pipeline_result.get("reason")
+        if reason is not None and getattr(reason, "error", None):
+            err = str(reason.error)[:200]
+            note = await self._save_repair_memory(
+                kind="llm_error",
+                content=(
+                    f"LLM error on question '{question[:80]}': {err}. "
+                    f"Pipeline fell back to deterministic reasoning."
+                ),
+                importance=0.5,
+            )
+            if note:
+                repairs.append(note)
+
+        # 3. Proactive/opinion steps errored: the LLM partially failed.
+        for step_name in ("proactive", "opinion", "verification"):
+            step = llm_pipeline_result.get(step_name)
+            if step is not None and getattr(step, "error", None):
+                err = str(step.error)[:160]
+                note = await self._save_repair_memory(
+                    kind=f"{step_name}_error",
+                    content=f"{step_name} step errored: {err}",
+                    importance=0.4,
+                )
+                if note:
+                    repairs.append(note)
+
+        # 4. No memories cited but the LLM gave an answer — possible
+        #    hallucination.  Note it so the user can be skeptical.
+        if (
+            reason is not None
+            and reason.answer
+            and not reason.error
+            and not memories
+        ):
+            note = await self._save_repair_memory(
+                kind="unsupported_answer",
+                content=(
+                    f"Answer for '{question[:80]}' was generated without "
+                    f"any cited memories — possible hallucination."
+                ),
+                importance=0.45,
+            )
+            if note:
+                repairs.append(note)
+
+        # 5. Stale retrieval: every cited memory is older than 30 days.
+        #    The mind's recall found something but it is not fresh.
+        from datetime import datetime, timezone
+        cutoff = 30
+        now = datetime.now(timezone.utc)
+        if memories:
+            all_old = True
+            for m in memories:
+                ts = m.get("created_at")
+                if not ts:
+                    continue
+                try:
+                    when = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                    if (now - when).days < cutoff:
+                        all_old = False
+                        break
+                except Exception:
+                    all_old = False
+                    break
+            if all_old:
+                note = await self._save_repair_memory(
+                    kind="stale_recall",
+                    content=(
+                        f"All {len(memories)} memories cited for "
+                        f"'{question[:60]}' are older than {cutoff} days. "
+                        f"Mind should request fresh sync."
+                    ),
+                    importance=0.5,
+                )
+                if note:
+                    repairs.append(note)
+
+        return repairs
+
+    async def _save_repair_memory(
+        self,
+        kind: str,
+        content: str,
+        importance: float = 0.5,
+    ) -> Optional[str]:
+        """Persist a self-repair memory.  Returns a short summary line
+        that can be surfaced to the user, or None on failure."""
+        if self.memory is None:
+            return None
+        try:
+            result = await self.memory.save(
+                content=content,
+                agent_id=f"mind-repair-{self.mind_id}",
+                memory_type="observation",
+                importance=importance,
+                tags=[
+                    "self-repair",
+                    f"repair:{kind}",
+                    f"mind:{self.mind_id}",
+                ],
+            )
+            mid = (result or {}).get("id")
+            if mid:
+                return f"self-repair: {kind} (memory {str(mid)[:8]})"
+        except Exception as e:
+            log.debug("self-repair save failed for kind=%s: %s", kind, e)
+        return None
+
+    def _merge_repair_answer(self, original: Optional[str], repairs: List[str]) -> str:
+        """Prepend repair notes to the answer so the user sees what
+        the mind fixed during this think() call."""
+        if not repairs:
+            return original or ""
+        bullet_lines = "\n".join(f"  • {r}" for r in repairs)
+        prefix = f"⚙ mind self-repair:\n{bullet_lines}\n"
+        if original:
+            return f"{prefix}\n{original}"
+        return prefix.rstrip()
+
 
 
 __all__ = [

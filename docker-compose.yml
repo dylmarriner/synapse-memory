@@ -53,27 +53,27 @@ services:
     security_opt:
       - seccomp=unconfined
     volumes:
-      - /usr/share/ollama/.ollama/models/blobs:/models:ro
+      - /home/kubuntux/.nexus-models:/models/active:ro
+      - /usr/share/ollama/.ollama/models/blobs:/models/ollama:ro
     environment:
       LD_LIBRARYORY: /usr/local/lib
     entrypoint: ["/usr/local/bin/llama-server"]
     command:
       - --model
-      - /models/sha256-3e4cb14174460404e7a233e531675303b2fbf7749c02f91864fe311ab6344e4f
+      - /models/active/qwen25-3b-instruct-q4_k_m.gguf
       - --port
       - "11434"
       - --host
       - 0.0.0.0
       - --no-webui
       - -c
-      - "8192"
+      - "4096"
       - -ngl
       - "999"
       - --no-mmap
       - --device
       - Vulkan0
-      - --chat-template
-      - chatml
+      - --jinja
       - --flash-attn
       - "on"
       - -b
@@ -104,7 +104,7 @@ services:
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
-      MIND_LLM_MODEL: ${MIND_LLM_MODEL:-qwen2.5:7b-instruct-q4_K_M}
+      MIND_LLM_MODEL: ${MIND_LLM_MODEL:-qwen2.5:3b-instruct}
       MIND_FALLBACK_MODEL: ${MIND_FALLBACK_MODEL:-deepseek-chat}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://llama-server:11434/v1}
       MIND_ENABLE_EXTRACT: ${MIND_ENABLE_EXTRACT:-true}

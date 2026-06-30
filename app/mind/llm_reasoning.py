@@ -245,6 +245,44 @@ def clear_cache() -> None:
 # LLM client helpers
 # ---------------------------------------------------------------------------
 
+# Server endpoints that don't support OpenAI's `response_format=json_object`.
+# llama-server (llama.cpp HTTP), vLLM without xgrammar, and ollama without
+# the right build will all 400 on it.  We detect by base URL host or by a
+# per-process allow-list.
+_NON_JSON_FORMAT_HOSTS = {
+    "llama-server",
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "host.docker.internal",
+}
+
+
+def _server_rejects_response_format(llm_client: Any) -> bool:
+    """Return True if the LLM server is known to reject json_object format."""
+    try:
+        base = getattr(llm_client, "base_url", None) or ""
+        # AsyncOpenAI stores base_url on .base_url
+        host = base.split("//", 1)[-1].split(":", 1)[0].split("/", 1)[0]
+        return host in _NON_JSON_FORMAT_HOSTS or host.endswith(".local")
+    except Exception:
+        return False
+
+
+def _strip_think_blocks(text: str) -> str:
+    """Remove Qwen3-style `<think>...</think>` blocks and return the
+    visible answer.  Without this, the parser sees the thinking trace
+    and thinks the model produced no answer."""
+    if not text:
+        return text
+    cleaned = text
+    # Strip closing </think> and everything inside <think>
+    import re
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL)
+    cleaned = re.sub(r"<think>.*$", "", cleaned, flags=re.DOTALL)
+    return cleaned.strip()
+
+
 def is_llm_available(llm_client: Any) -> bool:
     """Return True if the LLM client is usable for reasoning."""
     if llm_client is None:
@@ -281,10 +319,15 @@ async def _call_llm(
             "temperature": 0,
             "timeout": timeout,
         }
-        if use_json_mode:
+        # `response_format=json_object` is an OpenAI-only feature.  Many
+        # local servers (llama-server, vLLM without xgrammar) reject it
+        # with 400.  We detect those servers by checking the base URL
+        # and skip the format hint so the call succeeds and the parser
+        # strips any non-JSON preamble.
+        if use_json_mode and not _server_rejects_response_format(llm_client):
             kwargs["response_format"] = {"type": "json_object"}
         resp = await llm_client.chat.completions.create(**kwargs)
-        return resp.choices[0].message.content or ""
+        return _strip_think_blocks(resp.choices[0].message.content or "")
     if hasattr(llm_client, "generate"):
         return await llm_client.generate(
             system=system_prompt,
