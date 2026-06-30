@@ -192,26 +192,26 @@ async def iris_gate(
             bytes_used += len(src)
     if rung >= 4:
         if not justification:
-                return {
-                    "rung": rung, "error": "rung 4 (full source) requires justification",
-                    "card": card,
-                }
-            # Log the audit
-            await db.execute(text("""
-                INSERT INTO code_iris_audit
-                    (repo_id, agent_id, symbol_id, rung, bytes_returned, justification)
-                VALUES (:rid, :aid, :sid, :rung, :bytes, :just)
-            """), {
-                "rid": repo_id, "aid": agent_id, "sid": card["id"],
-                "rung": rung, "bytes": bytes_used, "just": justification,
-            })
-            await db.commit()
-        return {
-            "rung": rung,
-            "card": card,
-            "bytes": bytes_used,
-            "est_tokens": int(bytes_used * est_tokens_per_char),
-        }
+            return {
+                "rung": rung, "error": "rung 4 (full source) requires justification",
+                "card": card,
+            }
+        # Log the audit
+        await db.execute(text("""
+            INSERT INTO code_iris_audit
+                (repo_id, agent_id, symbol_id, rung, bytes_returned, justification)
+            VALUES (:rid, :aid, :sid, :rung, :bytes, :just)
+        """), {
+            "rid": repo_id, "aid": agent_id, "sid": card["id"],
+            "rung": rung, "bytes": bytes_used, "just": justification,
+        })
+        await db.commit()
+    return {
+        "rung": rung,
+        "card": card,
+        "bytes": bytes_used,
+        "est_tokens": int(bytes_used * est_tokens_per_char),
+    }
     elif file_path:
         # File-level: return all symbols in the file
         params: Dict[str, Any] = {"path": file_path, "rid": repo_id}
