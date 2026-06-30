@@ -38,11 +38,8 @@ COLUMN_TAGS: Dict[str, str] = {
     "docstring": "d",
     "language": "l",
     "complexity": "c",
-    "line_count": "l",  # collides with language — caller chooses
     "weight": "w",
     "confidence": "o",
-    "kind_label": "k",
-    "depth": "d",
 }
 
 
