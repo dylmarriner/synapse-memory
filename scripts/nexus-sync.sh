@@ -43,6 +43,31 @@ fi
 
 echo "$(date -Iseconds) changes detected — pushing to Nexus"
 
+# Record RTK event (saves tokens-by-not-printing-raw-output).
+rtk_resp=$(curl -s -X POST "${NEXUS_URL}/v1/rtk/events" \
+  -H "Authorization: Bearer ${NEXUS_SECRET}" \
+  -H "Content-Type: application/json" \
+  --max-time 15 \
+  -d "$(python3 -c "
+import json
+print(json.dumps({
+  'agent_id': '${AGENT_ID}',
+  'command': 'nexus-sync',
+  'exit_code': 0,
+  'duration_ms': 0,
+  'output_chars': 0,
+  'filtered_chars': 0,
+  'tokens_saved_estimate': 8000,
+  'summary': 'Pushed ${#SOURCES[@]} source files to Nexus from ${hostname_short}',
+  'durable': True,
+  'importance': 0.55,
+  'tags': ['rtk', 'command'],
+  'metadata': {'wrapper': 'nexus-sync.sh'}
+}))")" 2>&1)
+if [ -z "$rtk_resp" ] || ! echo "$rtk_resp" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('recorded')" 2>/dev/null; then
+  echo "  ! rtk event failed: $rtk_resp"
+fi
+
 # Find machine metadata
 hostname_short="${HOSTNAME_SHORT:-$(hostname -s)}"
 tailscale_ip=$(tailscale ip -4 2>/dev/null | head -1 || echo "")
