@@ -23,9 +23,9 @@ if [ ! -f "$SYNC_SCRIPT_SOURCE" ]; then
 fi
 
 echo "→ ${HOST}: copying nexus-sync.sh from $SYNC_SCRIPT_SOURCE"
-ssh "$HOST" "mkdir -p \$HOME/.local/bin \$HOME/.config/nexus-sync"
-scp "$SYNC_SCRIPT_SOURCE" "${HOST}:${SCRIPT_PATH}"
-ssh "$HOST" "chmod +x ${SCRIPT_PATH}"
+ssh "$HOST" 'mkdir -p "$HOME/.local/bin" "$HOME/.config/nexus-sync"'
+scp "$SYNC_SCRIPT_SOURCE" "${HOST}:./nexus-sync.sh"
+ssh "$HOST" 'mv ~/nexus-sync.sh "$HOME/.local/bin/nexus-sync.sh" && chmod +x "$HOME/.local/bin/nexus-sync.sh"'
 
 echo "→ ${HOST}: writing .env (NEXUS_SECRET, NEXUS_AGENT_ID, NEXUS_URL)"
 ssh "$HOST" bash -s "$AGENT_ID" "$NEXUS_SECRET_VALUE" <<'REMOTE'
