@@ -12,10 +12,17 @@ HOST="$1"
 AGENT_ID="${2:-$1}"
 NEXUS_SECRET_VALUE="${NEXUS_SECRET:-nexus-memory-shared-key-2026}"
 SCRIPT_PATH="\$HOME/.local/bin/nexus-sync.sh"
-SOURCE_REPO="/home/kubuntux/synapse-memory"
-SYNC_SCRIPT_SOURCE="$SOURCE_REPO/scripts/nexus-sync.sh"
 
-echo "→ ${HOST}: copying nexus-sync.sh"
+# Resolve the local repo root (the directory containing this installer script).
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SYNC_SCRIPT_SOURCE="$SCRIPT_DIR/nexus-sync.sh"
+
+if [ ! -f "$SYNC_SCRIPT_SOURCE" ]; then
+  echo "error: $SYNC_SCRIPT_SOURCE not found"
+  exit 1
+fi
+
+echo "→ ${HOST}: copying nexus-sync.sh from $SYNC_SCRIPT_SOURCE"
 ssh "$HOST" "mkdir -p \$HOME/.local/bin \$HOME/.config/nexus-sync"
 scp "$SYNC_SCRIPT_SOURCE" "${HOST}:${SCRIPT_PATH}"
 ssh "$HOST" "chmod +x ${SCRIPT_PATH}"
