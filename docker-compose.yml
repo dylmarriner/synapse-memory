@@ -62,7 +62,7 @@ services:
       - --model
       - /models/active/qwen25-3b-instruct-q4_k_m.gguf
       - --alias
-      - qwen2.5:3b-instruct
+      - qwen2.5-3b-instruct
       - --port
       - "11434"
       - --host
@@ -106,7 +106,7 @@ services:
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
-      MIND_LLM_MODEL: ${MIND_LLM_MODEL:-qwen2.5:3b-instruct}
+      MIND_LLM_MODEL: ${MIND_LLM_MODEL:-qwen2.5-3b-instruct}
       MIND_FALLBACK_MODEL: ${MIND_FALLBACK_MODEL:-deepseek-chat}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://llama-server:11434/v1}
       MIND_ENABLE_EXTRACT: ${MIND_ENABLE_EXTRACT:-true}
