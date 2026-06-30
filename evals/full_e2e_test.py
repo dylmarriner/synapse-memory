@@ -101,14 +101,14 @@ status, body, dt = call("POST", "/v1/memory/recall", {
     "query": "llama-server vulkan RX 580", "agent_id": test_agent, "limit": 5
 })
 memories_found = len(body) if isinstance(body, list) else 0
-# Allow 1s for embedding to land before recall — recall depends on the embed
+# Allow 3s for embedding to land before recall — recall depends on the embed
 # worker having produced a vector for the just-saved memory. Without this delay
 # the recall can race the worker and return 0 hits even though the row exists.
-time.sleep(1.5)
+time.sleep(3)
 status, body, dt = call("POST", "/v1/memory/recall", {
     "query": "llama-server vulkan RX 580", "agent_id": test_agent, "limit": 5
 })
-memories_found = len(body) if isinstance(body, list) else 0
+memories_found = len(body.get("results", [])) if isinstance(body, dict) else 0
 record("memory_recall", "POST", "/v1/memory/recall", status, body, dt, status == 200 and memories_found > 0, f"found={memories_found}")
 
 status, body, dt = call("POST", "/v1/memory/recall/debug", {

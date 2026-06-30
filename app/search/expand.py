@@ -27,7 +27,7 @@ Return ONLY a comma-separated list of alternative search phrases. No numbering, 
 def is_trivial_query(query: str) -> bool:
     """Return True if the query carries no semantic signal worth searching for."""
     stripped = query.strip()
-    if len(stripped) < 8:
+    if len(stripped) < 3:
         return True
     if _TRIVIAL_PATTERNS.match(stripped):
         return True
