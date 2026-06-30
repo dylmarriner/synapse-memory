@@ -106,7 +106,15 @@ async def save(body: MemorySaveRequest, request: Request, db: AsyncSession = Dep
             )
         except Exception as e:
             log.debug("active memory save failed, falling back: %s", e)
-    return await save_memory(db, request.app.state.redis, body)
+    result = await save_memory(db, request.app.state.redis, body)
+    # Auto-link the new memory to any code symbols it mentions.
+    try:
+        from app.code.links import auto_link_memory_to_symbols
+        if result.id:
+            await auto_link_memory_to_symbols(db, str(result.id), body.content or "")
+    except Exception as e:
+        log.debug("auto-link failed: %s", e)
+    return result
 
 
 @router.post("/batch", response_model=MemoryBatchSaveResponse)

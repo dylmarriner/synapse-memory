@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.code import cards as C
 from app.code import indexer as IDX
+from app.code import links as LNK
 from app.db import get_db
 
 log = logging.getLogger("nexus.routers.code")
@@ -110,6 +111,58 @@ async def get_card(
     if not card:
         raise HTTPException(404, f"symbol '{qualified_name}' not found")
     return card
+
+
+@router.get("/symbol/{qualified_name:path}/memories")
+async def get_symbol_memories(
+    qualified_name: str,
+    repo_id: Optional[str] = None,
+    limit: int = Query(20, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """Get memories that reference this symbol.
+
+    This is the inverse of `link_memory_to_symbol`: given a code
+    symbol, return all the memories that talk about it.  Used by
+    the dashboard to show "what memories mention this function?" and
+    by the mind to recall memories by symbol reference.
+    """
+    if repo_id is None:
+        repo_id = await _default_repo(db)
+    memories = await LNK.find_memories_for_symbol(db, repo_id, qualified_name, limit)
+    return {
+        "qualified_name": qualified_name,
+        "repo_id": repo_id,
+        "memories": memories,
+        "count": len(memories),
+    }
+
+
+class LinkMemoryRequest(BaseModel):
+    memory_id: str
+    code_symbol_id: Optional[str] = None
+    code_file_id: Optional[str] = None
+    raw_text: Optional[str] = None
+    source: str = Field("manual", pattern="^(manual|auto_extract|mind_inject|user_feedback)$")
+    confidence: float = Field(0.5, ge=0.0, le=1.0)
+
+
+@router.post("/link")
+async def create_link(body: LinkMemoryRequest, db: AsyncSession = Depends(get_db)) -> Dict[str, Any]:
+    """Create a memory ↔ code-symbol link.  Exactly one of
+    code_symbol_id / code_file_id / raw_text must be set."""
+    from fastapi import HTTPException
+    targets = [body.code_symbol_id, body.code_file_id, body.raw_text]
+    if sum(1 for t in targets if t) != 1:
+        raise HTTPException(400, "exactly one of code_symbol_id, code_file_id, raw_text must be set")
+    repo_id = await _default_repo(db)
+    if body.code_symbol_id:
+        lid = await LNK.link_memory_to_symbol(db, body.memory_id, body.code_symbol_id, body.source, body.confidence)
+    elif body.code_file_id:
+        lid = await LNK.link_memory_to_file(db, body.memory_id, body.code_file_id, body.source, body.confidence)
+    else:
+        lid = await LNK.link_memory_to_raw(db, body.memory_id, repo_id, body.raw_text, body.source, body.confidence)
+    return {"link_id": lid, "memory_id": body.memory_id, "source": body.source}
 
 
 @router.post("/iris")
