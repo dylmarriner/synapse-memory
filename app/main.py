@@ -6,7 +6,7 @@ Dashboard: http://100.93.75.87:7777/
 """
 
 import asyncio
-from typing import Optional
+from typing import Optional, Dict
 import hashlib
 import hmac
 import logging
