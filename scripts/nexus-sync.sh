@@ -44,7 +44,7 @@ fi
 echo "$(date -Iseconds) changes detected — pushing to Nexus"
 
 # Find machine metadata
-hostname_short=$(hostname -s)
+hostname_short="${HOSTNAME_SHORT:-$(hostname -s)}"
 tailscale_ip=$(tailscale ip -4 2>/dev/null | head -1 || echo "")
 
 pushed=0
