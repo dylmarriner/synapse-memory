@@ -143,7 +143,6 @@ def decode_records(blob: str) -> List[Dict[str, str]]:
                 break
         else:
             col_names.append(c)
-    pref_str = parts[2].split("=", 1)[1] if "=" in parts[2] else ""
     prefixes = {}
     for p in pref_str.split(";") if pref_str else []:
         if "=" in p:
