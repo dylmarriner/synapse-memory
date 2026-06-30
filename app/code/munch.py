@@ -62,7 +62,7 @@ def _intern_path_prefixes(paths: Iterable[str]) -> List[str]:
     # Sort by count desc, then prefix length desc (longer first)
     sorted_prefixes = sorted(counter.items(), key=lambda x: (-x[1], -len(x[0])))
     # Only keep prefixes that appear more than once
-    return [(f"@{i}", p) for i, (p, _) in enumerate(p for p, c in sorted_prefixes if c > 1)]
+    return [(f"@{i}", prefix) for i, (prefix, count) in enumerate(sorted_prefixes) if count > 1]
 
 
 def _shorten_path(path: str, prefixes: List[tuple]) -> str:
@@ -111,6 +111,8 @@ def encode_records(
         prefixes = _intern_path_prefixes(r.get("path", "") for r in records)
     head = "|".join(COLUMN_TAGS.get(c, c[:1]) for c in columns)
     pref_str = ";".join(f"{h}={p}" for h, p in prefixes)
+    body = "\n".join(_format_row(r, columns, prefixes) for r in records)
+    return f"MUNCH|cols={head}|prefixes={pref_str}|body=\n{body}"
     body = "\n".join(_format_row(r, columns, prefixes) for r in records)
     return f"MUNCH|cols={head}|prefixes={pref_str}|body=\n{body}"
 
