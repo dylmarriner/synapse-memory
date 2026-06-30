@@ -124,15 +124,14 @@ def decode_records(blob: str) -> List[Dict[str, str]]:
         raise ValueError("not a MUNCH blob")
     header, body = lines[0], lines[1] if len(lines) > 1 else ""
     # Header format: "MUNCH|cols=<col1>|<col2>|...|prefixes=<p1>;<p2>|body="
-    # The col names use single-letter tags.  Parse the cols section by
-    # finding the 'cols=' prefix and stopping at the next known section.
-    cols_str = ""
-    prefixes_str = ""
-    for part in header.split("|"):
-        if part.startswith("cols="):
-            cols_str = part[len("cols="):]
-        elif part.startswith("prefixes="):
-            prefixes_str = part[len("prefixes="):]
+    # The cols section is everything between the literal "cols=" and
+    # the next "|prefixes=" (or "|body=") marker.  We don't use a simple
+    # split('|') because cols themselves contain '|'.
+    import re
+    cols_match = re.search(r"cols=([^|]+(?:\|[^|]+)*?)(?=\|prefixes=|\|body=)", header)
+    cols_str = cols_match.group(1) if cols_match else ""
+    prefixes_match = re.search(r"prefixes=([^|]*)(?=\|body=)", header)
+    prefixes_str = prefixes_match.group(1) if prefixes_match else ""
     cols = cols_str.split("|") if cols_str else []
     col_names = []
     for c in cols:
