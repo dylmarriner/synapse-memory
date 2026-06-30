@@ -178,10 +178,10 @@ async def iris_gate(
                    s.complexity, s.line_count, f.path, f.language
             FROM code_symbols s
             JOIN code_files f ON f.id = s.file_id
-            WHERE s.qualified_name = :qn AND (:rid IS NULL OR s.repo_id = :rid)
-            LIMIT 1
-        """), {"qn": symbol, "rid": repo_id})).fetchone()
-        if not sym:
+        WHERE s.qualified_name = :qn AND (CAST(:rid AS text) IS NULL OR s.repo_id = CAST(:rid AS uuid))
+        LIMIT 1
+    """), {"qn": symbol, "rid": repo_id})).fetchone()
+    if not sym:
             return {"rung": rung, "error": f"symbol '{symbol}' not found"}
         card = _row_to_card(sym)
         bytes_used = len(str(card))
@@ -222,7 +222,7 @@ async def iris_gate(
                    s.complexity, s.line_count, f.path, f.language
             FROM code_symbols s
             JOIN code_files f ON f.id = s.file_id
-            WHERE f.path = :path AND (:rid IS NULL OR s.repo_id = :rid)
+            WHERE f.path = :path AND (CAST(:rid AS text) IS NULL OR s.repo_id = CAST(:rid AS uuid))
             ORDER BY s.start_line
         """), params)).fetchall()
         if not rows:
