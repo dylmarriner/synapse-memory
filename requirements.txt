@@ -25,7 +25,7 @@ inotify_simple>=2.0  # real-time file-change watcher for the indexer
 aiohttp>=3.9  # async HTTP client used by the code watcher
 
 # Optional: local cross-encoder reranker (RERANKER_PROVIDER=local)
-# sentence-transformers>=3.0
+sentence-transformers>=3.0
 
 # Optional: OpenTelemetry observability (OTEL_ENABLED=true)
 # opentelemetry-sdk>=1.25
