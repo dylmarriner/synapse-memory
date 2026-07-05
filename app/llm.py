@@ -5,17 +5,31 @@ from app.config import settings
 
 
 def get_llm_client():
-    """Return an OpenAI-compatible async client, preferring DeepSeek, then OpenAI.
-    Returns None if no API key is configured."""
+    """Return an OpenAI-compatible async client for the configured primary LLM.
+
+    Preference order:
+    1. Local llama/Ollama when the configured model is the local alias.
+    2. DeepSeek when a DeepSeek key exists.
+    3. OpenAI when an OpenAI key exists.
+    4. Local Ollama as a final fallback when a base URL exists.
+    """
+    model = (settings.llm_model or "").strip().lower()
+    if model == "qwen2.5-3b-instruct":
+        return get_ollama_client(base_url=settings.ollama_base_url, model=settings.llm_model)
     if settings.deepseek_api_key:
         from openai import AsyncOpenAI
         return AsyncOpenAI(
             api_key=settings.deepseek_api_key,
             base_url=settings.deepseek_base_url,
         )
-    if settings.openai_api_key:
+    if settings.openai_api_key or settings.openai_base_url:
         from openai import AsyncOpenAI
-        return AsyncOpenAI(api_key=settings.openai_api_key)
+        kwargs = {"api_key": settings.openai_api_key or "opencode"}
+        if settings.openai_base_url:
+            kwargs["base_url"] = settings.openai_base_url
+        return AsyncOpenAI(**kwargs)
+    if settings.ollama_base_url:
+        return get_ollama_client(base_url=settings.ollama_base_url, model=settings.llm_model)
     return None
 
 
@@ -52,6 +66,8 @@ async def llm_complete(
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        return (resp.choices[0].message.content or "").strip()
+        message = resp.choices[0].message
+        content = getattr(message, "content", None) or getattr(message, "reasoning_content", None) or ""
+        return content.strip() or None
     except Exception:
         return None

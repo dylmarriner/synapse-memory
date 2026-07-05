@@ -155,7 +155,7 @@ async def recall(body: MemoryRecallRequest):
                 query=body.query,
                 agent_id=body.agent_id,
                 limit=body.limit,
-                reasoning_depth="fast",
+                reasoning_depth="deep",
             )
             # Map the mind's reasoned response into the standard recall shape
             # so existing clients keep working, while the reasoned answer,
@@ -165,10 +165,14 @@ async def recall(body: MemoryRecallRequest):
                 MemoryResult(
                     id=str(m.get("id") or ""),
                     content=m.get("content") or m.get("text") or "",
+                    score=float(m.get("score", 0.0) or 0.0),
+                    relevance=float(m.get("relevance", 0.0) or 0.0),
                     memory_type=m.get("memory_type", "observation"),
                     importance=float(m.get("importance", 0.5) or 0.5),
                     agent_id=str(m.get("agent_id") or "") or None,
+                    confidence=float(m.get("confidence", 1.0) or 1.0),
                     metadata=m.get("metadata") or {},
+                    matched_by=list(m.get("matched_by") or []),
                 )
                 for m in cited
                 if isinstance(m, dict) and m.get("id")

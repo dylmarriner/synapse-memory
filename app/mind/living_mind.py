@@ -435,16 +435,7 @@ class LivingMind:
         context: Dict[str, Any],
         limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """Pull relevant memories through the existing Nexus recall.
-
-        Honours two scope filters that the Mind recognises:
-          - `context["container_tag"]` — only memories in that tag
-          - `context["scope"]`           — only memories in that scope
-            (wing.room.drawer — matches as a prefix)
-
-        If no memory store is wired (e.g. in pure unit tests), we
-        return an empty list — the rest of the pipeline tolerates this.
-        """
+        """Pull relevant memories, then re-rank with structure-aware signals."""
         if self.memory is None:
             return []
         limit = limit or self.config.max_memories
@@ -459,23 +450,114 @@ class LivingMind:
                 container_tag=container_tag,
                 scope=scope,
             )
-            # If container_tag or scope was set but the recall didn't
-            # filter (the underlying store may not support it), do an
-            # in-process filter as a fallback.
             if container_tag:
                 memories = [m for m in memories if m.get("container_tag") == container_tag]
             if scope:
                 from app.adopted import scope as _scope_mod
-                # Normalize the scope filter (case + form)
                 scope_norm = _scope_mod.normalize(scope)
                 memories = [
                     m for m in memories
                     if m.get("scope") and _scope_mod.matches(scope_norm, m["scope"])
                 ]
-            return memories
+            memories = self._rank_structural_memories(question, memories)
+            memories = await self._expand_structural_context(memories, limit=limit)
+            return self._rank_structural_memories(question, memories)[:limit]
         except Exception as e:
             log.warning("mind recall failed: %s", e)
             return []
+
+    def _rank_structural_memories(
+        self,
+        question: str,
+        memories: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        punctuation = ".,!?;:'\"()[]{}"
+        q_tokens = {
+            t.lower().strip(punctuation)
+            for t in question.split()
+            if len(t.strip(punctuation)) > 2
+        }
+
+        def _score(m: Dict[str, Any], idx: int) -> float:
+            text = (m.get("content") or m.get("text") or "").lower()
+            m_tokens = {t for t in text.split() if len(t) > 2}
+            overlap = len(q_tokens & m_tokens) / max(1, len(q_tokens)) if q_tokens else 0.0
+            layer = m.get("layer") or (m.get("metadata") or {}).get("layer")
+            relation_count = int(m.get("relation_count") or (m.get("metadata") or {}).get("relation_count") or 0)
+            matched_by = list(m.get("matched_by") or [])
+            bonus = 0.0
+            if layer == "L3":
+                bonus += 0.22
+            elif layer == "L2":
+                bonus += 0.12
+            bonus += min(0.12, relation_count * 0.025)
+            if "graph" in matched_by:
+                bonus += 0.05
+            if "linked" in matched_by:
+                bonus += 0.06
+            if (m.get("metadata") or {}).get("via_memory_link"):
+                bonus += 0.04
+            return (
+                overlap
+                + float(m.get("importance", 0.5) or 0.5) * 0.15
+                + float(m.get("confidence", 1.0) or 1.0) * 0.05
+                + bonus
+                - idx * 0.0001
+            )
+
+        scored = [(_score(m, idx), idx, m) for idx, m in enumerate(memories)]
+        scored.sort(key=lambda x: (x[0], -x[1]), reverse=True)
+        out: List[Dict[str, Any]] = []
+        seen = set()
+        for _, _, m in scored:
+            mid = m.get("id")
+            if mid and mid in seen:
+                continue
+            if mid:
+                seen.add(mid)
+            out.append(m)
+        return out
+
+    async def _expand_structural_context(
+        self,
+        memories: List[Dict[str, Any]],
+        *,
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        if not memories or not hasattr(self.memory, "get_related"):
+            return memories
+        expanded = list(memories)
+        seen = {m.get("id") for m in memories if m.get("id")}
+        link_budget = min(4, max(2, limit // 4))
+        added = 0
+        for anchor in memories[: min(4, len(memories))]:
+            mid = anchor.get("id")
+            if not mid:
+                continue
+            try:
+                related = await self.memory.get_related(memory_id=mid, limit=2)
+            except Exception as e:
+                log.debug("structural context expand failed for %s: %s", mid, e)
+                continue
+            for rel in related:
+                rid = rel.get("id")
+                if not rid or rid in seen:
+                    continue
+                meta = dict(rel.get("metadata") or {})
+                meta.update({
+                    "via_memory_link": True,
+                    "linked_from": mid,
+                    "link_kind": rel.get("link_kind"),
+                    "link_weight": rel.get("link_weight"),
+                })
+                rel["metadata"] = meta
+                rel["matched_by"] = list(dict.fromkeys(list(rel.get("matched_by") or []) + ["linked"]))
+                expanded.append(rel)
+                seen.add(rid)
+                added += 1
+                if added >= link_budget:
+                    return expanded
+        return expanded
 
     def _needs_clarification(self, question: str, memories: List[Dict[str, Any]]) -> bool:
         """Decide whether the question is too vague to answer.

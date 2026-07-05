@@ -83,32 +83,33 @@ def _get_mind(mind_id: str) -> LivingMind:
             ),
             memory_store=store,
         )
-        # Primary reasoning LLM: local Ollama (fast, on-GPU, no API cost).
+        # Primary reasoning LLM: OpenCode Zen (hosted, OpenAI-compatible).
+        try:
+            from app.llm import get_llm_client
+            mind.llm = get_llm_client()
+            mind.reasoning.llm = mind.llm
+            if mind.llm is not None:
+                log.info("mind '%s' primary LLM: %s", mind_id, _settings.mind_llm_model)
+        except Exception as e:
+            log.debug("mind '%s' Zen primary unavailable: %s", mind_id, e)
+        # Fallback reasoning LLM: local Ollama (used when Zen is unreachable
+        # or returns nothing — no API cost, on-GPU).
         try:
             import os
             from app.llm import get_ollama_client
             ollama_url = os.environ.get("OLLAMA_BASE_URL", _settings.ollama_base_url)
-            mind.llm = get_ollama_client(base_url=ollama_url, model=_settings.mind_llm_model)
-            mind.reasoning.llm = mind.llm
-            log.info("mind '%s' primary LLM: Ollama %s via %s",
-                     mind_id, _settings.mind_llm_model, ollama_url)
-        except Exception as e:
-            log.debug("mind '%s' Ollama primary unavailable: %s", mind_id, e)
-        # Fallback reasoning LLM: DeepSeek (used when the local call fails or
-        # returns nothing).  None if no DeepSeek/OpenAI key is configured.
-        try:
-            from app.llm import get_llm_client
-            mind.llm_fallback = get_llm_client()
+            mind.llm_fallback = get_ollama_client(base_url=ollama_url, model=_settings.mind_fallback_model)
             if mind.llm_fallback is not None:
-                log.info("mind '%s' fallback LLM: %s", mind_id, _settings.mind_fallback_model)
+                log.info("mind '%s' fallback LLM: Ollama %s via %s",
+                         mind_id, _settings.mind_fallback_model, ollama_url)
             if mind.llm is None:
-                # No local model — promote the fallback to primary so reasoning
+                # Zen unavailable — promote the fallback to primary so reasoning
                 # still gets LLM enrichment.
                 mind.llm = mind.llm_fallback
                 mind.reasoning.llm = mind.llm
                 mind.config.llm_model = _settings.mind_fallback_model
         except Exception as e:
-            log.debug("mind '%s' fallback LLM unavailable: %s", mind_id, e)
+            log.debug("mind '%s' Ollama fallback unavailable: %s", mind_id, e)
         if mind.llm is None:
             log.debug("mind '%s' running deterministic (no LLM available)", mind_id)
         # Wire the conversation manager to the DB if SessionLocal

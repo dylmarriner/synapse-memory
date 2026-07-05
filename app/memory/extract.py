@@ -299,8 +299,8 @@ async def _build_summary(agent_name: str, agent_id: str, db, llm) -> Optional[st
 
         # Store summary
         await db.execute(text("""
-            INSERT INTO summaries (agent_id, content, memory_count)
-            VALUES (CAST(:agent_id AS uuid), :content, :count)
+            INSERT INTO summaries (agent_id, content, memory_count, created_at)
+            VALUES (CAST(:agent_id AS uuid), :content, :count, NOW())
         """), {"agent_id": agent_id, "content": summary, "count": count})
         await db.commit()
 

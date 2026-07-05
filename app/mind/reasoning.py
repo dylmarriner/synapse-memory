@@ -180,9 +180,7 @@ class ReasoningEngine:
         return f"recall: {q}"
 
     def _filter_relevant(self, question: str, memories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Keyword overlap + memory_type weighting.  This is a cheap
-        fallback when no embedding model is available; in production
-        the LLM call replaces it with a semantic ranking."""
+        """Keyword overlap plus structural weighting from the memory graph/layers."""
         q_tokens = {t.lower() for t in question.split() if len(t) > 2}
         if not q_tokens:
             return memories[:5]
@@ -192,27 +190,49 @@ class ReasoningEngine:
             text = (m.get("content") or m.get("text") or "").lower()
             m_tokens = {t for t in text.split() if len(t) > 2}
             overlap = len(q_tokens & m_tokens) / max(1, len(q_tokens))
-            # Boost by importance
             score = overlap + 0.1 * float(m.get("importance", 0.5) or 0.5)
+            layer = m.get("layer") or (m.get("metadata") or {}).get("layer")
+            relation_count = int(m.get("relation_count") or (m.get("metadata") or {}).get("relation_count") or 0)
+            matched_by = list(m.get("matched_by") or [])
+            if layer == "L3":
+                score += 0.20
+            elif layer == "L2":
+                score += 0.12
+            score += min(0.10, relation_count * 0.025)
+            if "graph" in matched_by:
+                score += 0.04
+            if "linked" in matched_by:
+                score += 0.05
+            if (m.get("metadata") or {}).get("via_memory_link"):
+                score += 0.04
             scored.append((score, m))
         scored.sort(key=lambda x: x[0], reverse=True)
-        # Drop memories that have no overlap at all — they're noise
-        return [m for score, m in scored if score > 0][:10]
+        return [m for score, m in scored if score > 0][:12]
 
     def _identify_patterns(self, memories: List[Dict[str, Any]]) -> List[str]:
-        """Surface connections between memories.  Deterministic
-        version: look at memory_type distribution and shared tags."""
+        """Surface connections between memories, including graph/layer structure."""
         if not memories:
             return []
         type_counts: Dict[str, int] = {}
+        layer_counts: Dict[str, int] = {}
+        link_heavy = 0
         for m in memories:
             t = m.get("memory_type", "observation")
             type_counts[t] = type_counts.get(t, 0) + 1
+            layer = m.get("layer") or (m.get("metadata") or {}).get("layer")
+            if layer:
+                layer_counts[layer] = layer_counts.get(layer, 0) + 1
+            if int(m.get("relation_count") or (m.get("metadata") or {}).get("relation_count") or 0) > 0:
+                link_heavy += 1
         patterns = []
         for t, n in type_counts.items():
             if n >= 2:
                 patterns.append(f"Multiple {t} memories ({n}) about this topic")
-        # Tag intersections
+        for layer, n in sorted(layer_counts.items()):
+            if n >= 2:
+                patterns.append(f"{n} memories sit in {layer}, suggesting durable knowledge on this topic")
+        if link_heavy >= 2:
+            patterns.append(f"Knowledge-graph links connect {link_heavy} relevant memories into a cluster")
         tag_counts: Dict[str, int] = {}
         for m in memories:
             for tag in (m.get("metadata", {}).get("tags") or []):

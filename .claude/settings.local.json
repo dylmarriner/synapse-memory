@@ -5,7 +5,18 @@
       "Bash(curl -sf http://100.93.75.87:7777/health)",
       "Bash(ssh *)",
       "Bash(ssh-keyscan -H 100.75.23.127)",
-      "Bash(node *)"
+      "Bash(node *)",
+      "Bash(curl -s -m 5 http://100.93.75.87:7777/v1/status)",
+      "Bash(obelisk run *)",
+      "Bash(kill %1)",
+      "Bash(scp /mnt/development1/synapse-memory/docker-compose.yml kubuntux:/media/kubuntux/DEVELOPMENT1/synapse-memory/docker-compose.yml)",
+      "Bash(scp /mnt/development1/synapse-memory/app/main.py kubuntux:/media/kubuntux/DEVELOPMENT1/synapse-memory/app/main.py)",
+      "Bash(scp /mnt/development1/synapse-memory/app/config.py kubuntux:/media/kubuntux/DEVELOPMENT1/synapse-memory/app/config.py)",
+      "Bash(python3 -m py_compile /mnt/development1/synapse-memory/app/main.py)",
+      "Bash(scp /tmp/claude-1000/-mnt-development1-synapse-memory/9d636532-f841-47b1-9e77-77218877fa7c/scratchpad/watch_reflection.sh kubuntux:/tmp/watch_reflection.sh)",
+      "Bash(grep -v \"settings\\\\.\\\\|_key\\\\b.*:.*str\\\\|API_KEY:\\\\s*\\\\\\\\\\\\${\")",
+      "Bash(git check-ignore *)",
+      "Bash(git add *)"
     ]
   }
 }

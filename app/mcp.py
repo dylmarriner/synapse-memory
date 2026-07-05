@@ -5,6 +5,7 @@ import json
 import logging
 import time as _time
 from fastapi import APIRouter, Request, HTTPException
+from app.config import settings
 from fastapi.responses import StreamingResponse
 
 log = logging.getLogger("nexus.mcp")
@@ -740,7 +741,14 @@ TOOLS = [
 
 async def _dispatch(tool: str, args: dict, request: Request) -> str:
     import httpx
-    base = str(request.base_url).rstrip("/")
+    # Internal loopback, NOT request.base_url: every MCP tool below makes a
+    # same-process self-call back into this API. Building that URL from the
+    # incoming request's Host meant any client reaching this server via its
+    # Tailscale/LAN IP (i.e. every remote agent) made the container hairpin
+    # back out through the host's external IP, which Docker's default bridge
+    # networking does not route -- every tool call hung/failed for anyone
+    # not connecting from localhost.
+    base = f"http://127.0.0.1:{settings.nexus_port}"
     headers = {"Content-Type": "application/json"}
     if auth := request.headers.get("Authorization"):
         headers["Authorization"] = auth

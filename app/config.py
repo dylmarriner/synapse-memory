@@ -4,6 +4,9 @@ from typing import Optional
 
 class Settings(BaseSettings):
     nexus_secret: str = ""
+    environment: str = "production"
+    # Only honored when environment == "development" — see _verify_key in app/main.py.
+    nexus_disable_auth: bool = False
     # Optional separate credential for the web dashboard, so operators can
     # log into the UI without handing out the agent-facing NEXUS_SECRET.
     # Accepted by _verify_key in addition to nexus_secret when set.
@@ -14,6 +17,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     openai_api_key: Optional[str] = None
+    openai_base_url: Optional[str] = None
     anthropic_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
     deepseek_base_url: str = "https://api.deepseek.com/v1"
@@ -37,6 +41,21 @@ class Settings(BaseSettings):
     mind_enable_llm_opinion: bool = True        # LLM-driven opinion formation
     mind_enable_related_graph: bool = True      # expand context with graph-related memories
 
+    # Global mind self-reflection loop (background, unprompted).  A single
+    # well-known mind (mind_reflection_mind_id) is kept resident in-process
+    # and periodically reflects on recently-saved memories, forming/updating
+    # opinions.  Proactive pushes only fire when a reflection crosses the
+    # novelty/confidence threshold below, so the push stream stays quiet
+    # unless something is actually notable.
+    mind_reflection_enabled: bool = True
+    mind_reflection_mind_id: str = "nexus"
+    mind_reflection_interval_seconds: int = 1800
+    mind_reflection_lookback_memories: int = 50
+    mind_reflection_max_topics_per_cycle: int = 5
+    mind_reflection_push_stance_delta: float = 0.3   # push if strength moves at least this much
+    mind_reflection_push_min_strength: float = 0.75  # or push if a strong new opinion crosses this bar
+    mind_learning_interval_seconds: int = 3600
+
     # Token/cost controls. Defaults favor concise LLM calls while preserving quality.
     llm_cost_saver: bool = True
     llm_input_char_limit: int = 1200
@@ -46,6 +65,13 @@ class Settings(BaseSettings):
     llm_synthesis_max_tokens: int = 450
     llm_query_expansion: bool = False
     llm_query_expansion_min_chars: int = 80
+    llm_memory_organizer_enabled: bool = True
+    llm_memory_organizer_similarity_threshold: float = 0.72
+    llm_memory_organizer_pair_limit: int = 200
+    llm_memory_organizer_max_cluster_size: int = 6
+    llm_memory_decompose_enabled: bool = True
+    llm_memory_decompose_length_threshold: int = 600
+    llm_memory_decompose_batch_limit: int = 10
     context_memory_limit: int = 10
     context_memory_char_limit: int = 200
     context_conclusion_limit: int = 5

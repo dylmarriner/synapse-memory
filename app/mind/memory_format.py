@@ -1,27 +1,11 @@
-"""Structured memory formatting for LLM prompts.
-
-The LLM benefits enormously from a *structured* memory dump — date,
-scope, importance, type, and the actual content — rather than a flat
-list of strings.  This module turns a list of memory dicts into a
-compact, scannable prompt fragment that the reasoning LLM can use to
-ground its answer.
-
-Two output formats:
-  - `format_memories_brief`   : one line per memory, ~120 char content
-  - `format_memories_structured` : multi-line block with metadata
-                                  (used at STANDARD/DEEP depth)
-
-Both formats include a header with the total count and the time range
-so the LLM knows how much material it has.
-"""
+"""Structured memory formatting for LLM prompts."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 
 def _short(text: str, limit: int) -> str:
-    """Trim to `limit` chars on a word boundary, append … if cut."""
     if not text:
         return ""
     text = text.replace("\n", " ").strip()
@@ -32,7 +16,6 @@ def _short(text: str, limit: int) -> str:
 
 
 def _age_label(iso: Optional[str]) -> str:
-    """Convert ISO timestamp to a compact relative label like '3d', '2w', '5mo'."""
     if not iso:
         return "?d"
     try:
@@ -61,7 +44,6 @@ def _age_label(iso: Optional[str]) -> str:
 
 
 def _imp_bar(imp: float) -> str:
-    """Visual importance: ▁▂▃▄▅▆▇█ for 0..0.875+."""
     if imp is None:
         return "▄"
     levels = "▁▂▃▄▅▆▇█"
@@ -75,10 +57,6 @@ def format_memories_brief(
     char_limit: int = 140,
     max_items: int = 16,
 ) -> str:
-    """One line per memory.  Used at FAST depth (less context = faster).
-
-    Format: `[age] [type:scope] [id] content`
-    """
     if not memories:
         return "(no memories)"
     lines = []
@@ -89,8 +67,10 @@ def format_memories_brief(
         scope = (m.get("agent_id") or m.get("scope") or "—")
         if isinstance(scope, str) and len(scope) > 12:
             scope = scope[:12]
+        layer = m.get("layer") or (m.get("metadata") or {}).get("layer") or "-"
+        rels = int(m.get("relation_count") or (m.get("metadata") or {}).get("relation_count") or 0)
         content = _short(m.get("content") or "", char_limit)
-        lines.append(f"[{age}|{mtype}|{scope}] {mid}  {content}")
+        lines.append(f"[{age}|{mtype}|{layer}|{scope}|r{rels}] {mid}  {content}")
     return "\n".join(lines)
 
 
@@ -101,25 +81,12 @@ def format_memories_structured(
     max_items: int = 16,
     related_lookup: Optional[Dict[str, List[str]]] = None,
 ) -> str:
-    """Multi-line structured block.  Used at STANDARD/DEEP depth.
-
-    Each memory is presented as:
-        ### <id-prefix> <type> · <age> · imp ▆
-        <content...>
-        [related: <id-prefix> <id-prefix>]
-
-    The visual hierarchy helps the LLM scan quickly.  `related_lookup`
-    is a {memory_id: [related_id, ...]} map populated by the graph
-    expansion pass — when present, we surface 1-3 related memory ids
-    the embedding search missed.
-    """
     if not memories:
         return "(no memories)"
     related_lookup = related_lookup or {}
 
     total = len(memories)
     ages = [_age_label(m.get("created_at")) for m in memories]
-    types = [m.get("memory_type", "obs") for m in memories]
     header = f"# {total} memories"
     if any(a != "?d" for a in ages):
         try:
@@ -145,25 +112,31 @@ def format_memories_structured(
             imp_f = 0.5
         bar = _imp_bar(imp_f)
         content = _short(m.get("content") or "", char_limit)
+        layer = m.get("layer") or (m.get("metadata") or {}).get("layer") or "-"
+        relation_count = int(m.get("relation_count") or (m.get("metadata") or {}).get("relation_count") or 0)
+        modes = "+".join((m.get("matched_by") or [])[:3]) or "-"
 
-        # Optional related-memories line
         rel = related_lookup.get(mid_full) or related_lookup.get(mid)
         rel_line = ""
         if rel:
             rel_short = [r[:8] for r in rel[:3]]
             rel_line = f"\n  ↳ related: {' '.join(rel_short)}"
 
-        blocks.append(f"### {mid} {mtype} · {age} · imp {bar} ({imp_f:.2f})")
+        blocks.append(f"### {mid} {mtype} · {age} · {layer} · imp {bar} ({imp_f:.2f})")
+        blocks.append(f"[modes: {modes} | links: {relation_count}]")
         blocks.append(content)
+        if (m.get("metadata") or {}).get("via_memory_link"):
+            src = str((m.get("metadata") or {}).get("linked_from") or "")[:8]
+            kind = (m.get("metadata") or {}).get("link_kind") or "related"
+            blocks.append(f"[linked from {src} via {kind}]")
         if rel_line:
             blocks.append(rel_line)
-        blocks.append("")  # blank line between entries
+        blocks.append("")
 
     return "\n".join(blocks)
 
 
 def memory_ids(memories: List[Dict[str, Any]]) -> List[str]:
-    """Return a list of memory ids in the same order as `memories`."""
     return [m.get("id", "") for m in memories if m.get("id")]
 
 
@@ -172,12 +145,6 @@ def make_related_lookup(
     *,
     min_strength: float = 0.0,
 ) -> Dict[str, List[str]]:
-    """Turn raw graph relations into a {memory_id: [related_id, ...]} map.
-
-    `graph_relations` is a list of dicts with `from_id`, `to_id`, and
-    optionally `strength`.  Bidirectional — both endpoints get the other
-    in their related list.
-    """
     out: Dict[str, List[str]] = {}
     for r in graph_relations:
         try:
@@ -192,7 +159,6 @@ def make_related_lookup(
             continue
         out.setdefault(a, []).append(b)
         out.setdefault(b, []).append(a)
-    # dedupe, preserve order
     return {k: list(dict.fromkeys(v)) for k, v in out.items()}
 
 

@@ -22,7 +22,7 @@ async def memory_stream(request: Request, Authorization: Optional[str] = Query(d
     from app.config import settings
     from app.main import _verify_dashboard_token
     secret = settings.nexus_secret
-    if secret:
+    if secret and not settings.nexus_disable_auth:
         auth = request.headers.get("Authorization", "") or Authorization or ""
         token = auth.removeprefix("Bearer ").strip()
         if token != secret and not _verify_dashboard_token(token):

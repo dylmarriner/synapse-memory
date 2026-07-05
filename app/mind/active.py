@@ -57,35 +57,128 @@ class MemoryRouter:
     ) -> Dict[str, Any]:
         """Save through the mind.
 
-        1. Save the raw memory to the store
-        2. Have the Mind process it (form opinions, update identity)
-        3. Return the saved memory with Mind insights
+        Two hard rules, enforced by code rather than left to the LLM's
+        discretion:
+
+        1. A save request is never dropped. Whatever happens to
+           classification or reasoning below, the raw content always
+           ends up persisted — worst case via `_force_raw_save`.
+        2. The mind — not the caller — decides *where and how* the
+           memory is stored: its real type and importance, based on
+           the content itself, rather than trusting the agent's
+           (often lazy/default) guess. The caller's values are only a
+           fallback if classification fails.
+
+        After that, the mind reasons over the new memory (forms
+        opinions, updates identity) — that step is best-effort and
+        never allowed to block or fail the save itself.
         """
-        memory = await self.mind.memory.save(
-            content=content,
-            agent_id=agent_id,
-            memory_type=memory_type,
-            importance=importance,
-            tags=tags,
-            mind_id=self.mind.mind_id,
-        )
-        # Let the Mind form opinions / update identity on this new
-        # evidence.  We do a *cheap* think() in fast mode so the
-        # save path stays snappy.
+        classified_type, classified_importance = await self._classify(content, memory_type, importance)
+
+        memory: Dict[str, Any] = {}
         try:
-            await self.mind.think(
-                question=content,
-                context={"agent_id": agent_id, "auto_save": True},
-                reasoning_depth="fast",
-            )
+            memory = await self.mind.memory.save(
+                content=content,
+                agent_id=agent_id,
+                memory_type=classified_type,
+                importance=classified_importance,
+                tags=tags,
+                mind_id=self.mind.mind_id,
+            ) or {}
         except Exception as e:
-            log.debug("mind.think during save failed (non-fatal): %s", e)
+            log.warning("mind.memory.save raised, falling back to forced raw save: %s", e)
+
+        if not memory.get("id"):
+            memory = await self._force_raw_save(content, agent_id, classified_type, classified_importance, tags)
+
+        # Let the Mind form an opinion / update identity on this new
+        # evidence.  This is *not* routed through think() — content is a
+        # stored fact, not a question, and forcing it through the Q&A
+        # intent classifier misclassifies statements as recall queries.
+        # Form the opinion directly against the extracted topic instead.
+        try:
+            topic = self.mind._extract_topic(content)
+            if topic:
+                await self.mind.opinions.form_or_update(
+                    topic=topic,
+                    evidence=[memory],
+                )
+        except Exception as e:
+            log.debug("mind opinion-forming during save failed (non-fatal): %s", e)
+
         return {
             "id": memory.get("id"),
-            "memory_type": memory_type,
-            "importance": importance,
+            "memory_type": classified_type,
+            "importance": classified_importance,
             "mind_processed": True,
         }
+
+    async def _classify(self, content: str, fallback_type: str, fallback_importance: float) -> tuple[str, float]:
+        """Ask the mind's LLM what this memory actually is.
+
+        The caller's memory_type/importance are a fallback, not a default
+        to trust — most callers pass "observation"/0.5 regardless of what
+        the content actually is. If classification fails for any reason,
+        fall back to the caller's values so the save still proceeds.
+        """
+        try:
+            from app.llm import get_llm_client
+            from app.memory.extract import _batch_extract
+            llm = get_llm_client()
+            if llm is None:
+                return fallback_type, fallback_importance
+            extracted = await _batch_extract(content, llm, importance=fallback_importance)
+            classified_type = extracted.get("memory_type") or fallback_type
+            return classified_type, fallback_importance
+        except Exception as e:
+            log.debug("mind classification failed, keeping caller-provided type: %s", e)
+            return fallback_type, fallback_importance
+
+    async def _force_raw_save(
+        self,
+        content: str,
+        agent_id: Optional[str],
+        memory_type: str,
+        importance: float,
+        tags: Optional[List[str]],
+    ) -> Dict[str, Any]:
+        """Last-resort guarantee: a save request must never be silently lost.
+
+        Bypasses classification, dedup, and everything else in the normal
+        pipeline and writes the memory directly.
+        """
+        import json
+        from sqlalchemy import text
+        from app.db import SessionLocal
+        from app.embeddings import get_embedding
+        from app.memory.ingest import _ensure_agent
+
+        try:
+            async with SessionLocal() as session:
+                agent = await _ensure_agent(session, agent_id or "global")
+                emb = None
+                try:
+                    emb = await get_embedding(content)
+                except Exception as e:
+                    log.debug("embedding failed during forced raw save: %s", e)
+                vec = "[" + ",".join(str(x) for x in emb) + "]" if emb else None
+                row = (await session.execute(text("""
+                    INSERT INTO memories (agent_id, content, memory_type, importance, metadata, embedding)
+                    VALUES (:agent_id, :content, :memory_type, :importance, CAST(:meta AS jsonb), CAST(:embedding AS vector))
+                    RETURNING id
+                """), {
+                    "agent_id": agent.id if agent else None,
+                    "content": content,
+                    "memory_type": memory_type,
+                    "importance": importance,
+                    "meta": json.dumps({"tags": tags or [], "forced_raw_save": True}),
+                    "embedding": vec,
+                })).first()
+                await session.commit()
+                return {"id": str(row[0])} if row else {"id": None}
+        except Exception as e:
+            log.error("forced raw save also failed — memory lost: %s", e)
+            return {"id": None, "error": str(e)}
 
     async def recall(
         self,

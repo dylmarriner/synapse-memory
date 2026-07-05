@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_db
 from app.models.api import HealthResponse
 from app.memory.consolidate import consolidate
+from app.memory.organize import organize_memories
 
 router = APIRouter()
 
@@ -30,8 +31,8 @@ async def health(request: Request, db: AsyncSession = Depends(get_db)):
         components["redis"] = False
 
     s = request.app.state.settings
-    components["embeddings"] = bool(s.openai_api_key or s.deepseek_api_key or s.anthropic_api_key)
-    components["llm"] = bool(s.openai_api_key or s.anthropic_api_key or s.deepseek_api_key)
+    components["embeddings"] = bool(s.embedding_model)
+    components["llm"] = bool(s.llm_model or s.mind_llm_model or s.ollama_base_url)
 
     return HealthResponse(healthy=components["postgres"], components=components)
 
@@ -39,6 +40,12 @@ async def health(request: Request, db: AsyncSession = Depends(get_db)):
 @router.post("/admin/consolidate")
 async def trigger_consolidate(db: AsyncSession = Depends(get_db)):
     stats = await consolidate(db)
+    return {"success": True, "stats": stats}
+
+
+@router.post("/admin/organize")
+async def trigger_organize(db: AsyncSession = Depends(get_db)):
+    stats = await organize_memories(db)
     return {"success": True, "stats": stats}
 
 

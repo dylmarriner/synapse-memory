@@ -8,6 +8,9 @@ venv/
 # Virtual environments
 .env
 *.env.local
+.env.bak*
+*.bak
+*.bak-*
 
 # IDE
 .vscode/
@@ -28,6 +31,7 @@ node_modules/
 # Docker volumes
 postgres-data/
 redis-data/
+data/
 
 # Logs
 *.log

@@ -299,6 +299,20 @@ async def _run_migrations():
         except Exception as e:
             log.warning("Living Mind migration block failed: %s", e)
 
+        # Mind reflection log (migration 011).  Same try/except pattern.
+        try:
+            _migration_dir = Path(__file__).resolve().parents[1] / "migrations"
+            with open(_migration_dir / "011_mind_reflection.sql") as _f:
+                reflection_sql = _f.read()
+            for stmt in [s.strip() for s in reflection_sql.split(";") if s.strip()]:
+                if not stmt or all(line.strip().startswith("--") for line in stmt.splitlines() if line.strip()):
+                    continue
+                await _safe_exec(stmt, label="Mind reflection SQL step")
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            log.warning("Mind reflection migration block failed: %s", e)
+
 
         # Backfill basic device metadata so the dashboard can place legacy agents.
         await _safe_exec("""
@@ -366,13 +380,167 @@ async def _mind_periodic_learning_loop(interval_seconds: int = 3600):
                         await _persist.save_mind(mind, db)
                 except Exception as e:
                     log.debug("mind '%s' periodic save failed: %s", mind.mind_id, e)
+            try:
+                if settings.llm_memory_organizer_enabled:
+                    from app.memory.organize import organize_memories
+                    async with SessionLocal() as db:
+                        organizer_stats = await organize_memories(db)
+                    if organizer_stats.get("organizer_clusters"):
+                        log.info("mind organizer cycle: %s", organizer_stats)
+            except Exception as e:
+                log.debug("mind periodic organizer failed: %s", e)
         except Exception as e:
             log.warning("Mind periodic learning failed: %s", e)
+
+
+async def _mind_reflection_loop(interval_seconds: int = 1800):
+    """Background self-reflection for one global mind.
+
+    Unlike _mind_periodic_learning_loop (decay + persist + organize),
+    this loop makes the mind actually think about what it has recently
+    learned without being asked: it pulls recently-saved memories, derives
+    a handful of topics from them, reflects on each via the reasoning
+    engine, and forms/updates opinions from the result -- the same
+    opinion-forming step think() does on a normal question, just
+    self-triggered instead of request-triggered.
+
+    When a reflection produces a stance flip or a strong new opinion
+    (crossing mind_reflection_push_stance_delta or
+    mind_reflection_push_min_strength), it is surfaced proactively via
+    the existing push daemon so connected agents see it unprompted.
+    Anything below that bar is still recorded (opinion updated, logged
+    to mind_reflection_log) but silently -- no push spam every cycle.
+    """
+    from app.mind import persist as _persist
+    from app.routers.mind import _get_mind
+
+    mind_id = settings.mind_reflection_mind_id
+    last_reflected_at: Optional[str] = None
+
+    while True:
+        await asyncio.sleep(interval_seconds)
+        if not settings.mind_reflection_enabled:
+            continue
+        try:
+            mind = _get_mind(mind_id)
+
+            # Pull recently-saved memories since the last reflection cycle.
+            async with SessionLocal() as db:
+                rows = (await db.execute(text("""
+                    SELECT id::text AS id, content, memory_type, importance,
+                           agent_id::text AS agent_id, created_at
+                    FROM memories
+                    WHERE superseded_by IS NULL
+                      AND (CAST(:since AS timestamptz) IS NULL OR created_at > CAST(:since AS timestamptz))
+                    ORDER BY created_at DESC
+                    LIMIT :limit
+                """), {"since": last_reflected_at, "limit": settings.mind_reflection_lookback_memories})).mappings().all()
+            memories = [dict(r) for r in rows]
+            if not memories:
+                continue
+            last_reflected_at = memories[0]["created_at"].isoformat()
+
+            # Derive a small set of topics from the new memories.
+            topics: List[str] = []
+            for m in memories:
+                topic = mind._extract_topic(m.get("content", ""))
+                if topic and topic not in topics:
+                    topics.append(topic)
+                if len(topics) >= settings.mind_reflection_max_topics_per_cycle:
+                    break
+
+            for topic in topics:
+                try:
+                    prior = mind.opinions.get(topic)
+                    prior_strength = prior.strength if prior else None
+
+                    reflection = await mind.reflect(topic=topic)
+                    topic_memories = [
+                        m for m in memories
+                        if topic in m.get("content", "").lower()
+                    ] or memories
+                    opinion = await mind.opinions.form_or_update(
+                        topic=topic,
+                        evidence=topic_memories,
+                        current_stance_hint=reflection.reasoning_trace.stance_hint
+                        if reflection.reasoning_trace else None,
+                    )
+
+                    triggered_push = False
+                    if opinion is not None:
+                        strength_delta = (
+                            abs(opinion.strength - prior_strength)
+                            if prior_strength is not None else opinion.strength
+                        )
+                        crosses_bar = (
+                            strength_delta >= settings.mind_reflection_push_stance_delta
+                            or opinion.strength >= settings.mind_reflection_push_min_strength
+                        )
+                        if crosses_bar:
+                            triggered_push = True
+                            try:
+                                from app.mind.active import ProactiveManager
+                                proactive = ProactiveManager(mind)
+                                await proactive.surface(agent_id=None, question=topic)
+                            except Exception as e:
+                                log.debug("reflection proactive surface failed: %s", e)
+                            try:
+                                redis_client = app.state.redis
+                                from app.push.daemon import publish_push_event
+                                await publish_push_event(redis_client, agent_id="*", event="mind_reflection")
+                            except Exception as e:
+                                log.debug("reflection push publish failed: %s", e)
+
+                    try:
+                        async with SessionLocal() as db:
+                            await _persist.ensure_mind_row(mind.mind_id, db)
+                            await db.execute(text("""
+                                INSERT INTO mind_reflection_log
+                                    (mind_id, topic, stance, strength, summary, triggered_push)
+                                SELECT id, :topic, :stance, :strength, :summary, :triggered_push
+                                FROM minds WHERE name = :mind_name
+                            """), {
+                                "topic": topic,
+                                "stance": opinion.stance.value if opinion else None,
+                                "strength": opinion.strength if opinion else None,
+                                "summary": (reflection.answer or "")[:2000],
+                                "triggered_push": triggered_push,
+                                "mind_name": mind.mind_id,
+                            })
+                            await db.commit()
+                    except Exception as e:
+                        log.debug("reflection log write failed: %s", e)
+
+                    log.info(
+                        "mind '%s' reflected on '%s' (push=%s)",
+                        mind.mind_id, topic, triggered_push,
+                    )
+                except Exception as e:
+                    log.debug("reflection on topic '%s' failed: %s", topic, e)
+
+            try:
+                async with SessionLocal() as db:
+                    await _persist.save_mind(mind, db)
+            except Exception as e:
+                log.debug("mind '%s' reflection-cycle save failed: %s", mind.mind_id, e)
+        except Exception as e:
+            log.warning("Mind reflection loop failed: %s", e)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("Nexus starting — port %d", settings.nexus_port)
+
+    if settings.nexus_disable_auth:
+        if settings.environment != "development":
+            raise RuntimeError(
+                "NEXUS_DISABLE_AUTH is set but ENVIRONMENT is not 'development' — "
+                "refusing to start with auth disabled outside development."
+            )
+        log.critical(
+            "AUTH IS DISABLED (NEXUS_DISABLE_AUTH=true, ENVIRONMENT=development) — "
+            "every request bypasses authentication. Do not expose this instance."
+        )
 
     await _run_migrations()
     await _ensure_global_agent()
@@ -401,7 +569,17 @@ async def lifespan(app: FastAPI):
         _mind_periodic_learning_loop(mind_learning_interval)
     )
     log.info("Mind periodic learning started (every %ds)", mind_learning_interval)
-    
+
+    # Background self-reflection loop — one global mind thinks about
+    # recent memories unprompted and surfaces notable opinions proactively.
+    reflection_task = asyncio.create_task(
+        _mind_reflection_loop(settings.mind_reflection_interval_seconds)
+    )
+    log.info(
+        "Mind reflection loop started (every %ds, enabled=%s)",
+        settings.mind_reflection_interval_seconds, settings.mind_reflection_enabled,
+    )
+
     # Start the scheduler for daily consolidation reports
     from app.scheduler import scheduler_loop
     scheduler_task = asyncio.create_task(scheduler_loop())
@@ -424,6 +602,7 @@ async def lifespan(app: FastAPI):
 
     task.cancel()
     mind_learning_task.cancel()
+    reflection_task.cancel()
     scheduler_task.cancel()
     push_daemon.stop()
     push_task.cancel()
@@ -453,6 +632,9 @@ app.add_middleware(
 
 
 def _verify_key(request: Request):
+    if settings.nexus_disable_auth and settings.environment == "development":
+        log.critical("AUTH BYPASSED for %s %s (NEXUS_DISABLE_AUTH=true)", request.method, request.url.path)
+        return
     secret = settings.nexus_secret
     if not secret:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="NEXUS_SECRET not configured")
