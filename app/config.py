@@ -109,6 +109,28 @@ class Settings(BaseSettings):
     allow_agent_export: bool = True
     allow_agent_forget: bool = True
 
+    # ── Embedded / zero-friction install mode ─────────────────────────
+    # When true, SQLite and in-process fakeredis replace external Postgres
+    # and Redis, and the extraction worker runs inside the API process.
+    embedded_mode: bool = False
+
+    # ── Federation / multi-node P2P sync ──────────────────────────────
+    federation_enabled: bool = False
+    # Comma-separated peer base URLs, e.g. "http://node-b:7777,http://node-c:7777"
+    federation_peers: str = ""
+    # Shared secret used to HMAC-sign federation payloads between peers.
+    federation_secret: str = ""
+    # Stable identity for this node (falls back to hostname when empty).
+    federation_node_id: str = ""
+    # How often the background task pulls from each peer.
+    federation_interval_seconds: int = 30
+    # Max memories transferred per pull/push batch.
+    federation_batch_size: int = 200
+
+    @property
+    def federation_peer_list(self) -> list[str]:
+        return [p.strip().rstrip("/") for p in self.federation_peers.split(",") if p.strip()]
+
     model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore"}
 
 

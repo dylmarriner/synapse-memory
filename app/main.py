@@ -45,7 +45,7 @@ def _verify_dashboard_token(token: str) -> bool:
         if hmac.compare_digest(token, expected):
             return True
     return False
-from app.db import engine, SessionLocal
+from app.db import engine, SessionLocal, is_sqlite
 from app.models.schema import Base
 from app.routers.memory import router as memory_router
 from app.routers.agents import router as agents_router
@@ -65,6 +65,7 @@ from app.routers.adopted import router as adopted_router
 from app.routers.mind import router as mind_router
 from app.routers.layers import router as layers_router
 from app.routers.code import router as code_router
+from app.routers.federation import router as federation_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -98,6 +99,11 @@ async def _run_migrations():
     async with engine.begin() as conn:
         # Base tables via ORM
         await conn.run_sync(Base.metadata.create_all)
+
+        # The remaining migrations use PostgreSQL-only syntax and extensions.
+        # SQLite embedded databases are fully created from the ORM schema.
+        if is_sqlite():
+            return
 
         async def _safe_exec(sql, params=None, *, level="debug", label="migration step"):
             """Run one idempotent migration statement inside its own SAVEPOINT.
@@ -555,7 +561,8 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.debug("auto-register nexus-self skipped: %s", e)
 
-    redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+    from app.redis_util import make_redis
+    redis_client = make_redis(decode_responses=True)
     app.state.redis = redis_client
     app.state.settings = settings
 
@@ -591,6 +598,20 @@ async def lifespan(app: FastAPI):
     push_task = asyncio.create_task(push_daemon.start())
     log.info("Active memory push daemon started")
 
+    # Embedded mode: run the extraction worker in-process so no separate
+    # worker container is needed (it shares the in-process fakeredis queue).
+    embedded_worker_task = None
+    if settings.embedded_mode:
+        from app.memory.extract import run_worker
+        embedded_worker_task = asyncio.create_task(run_worker())
+        log.info("Embedded mode: extraction worker running in-process")
+
+    # Start federation pull loop (no-op unless FEDERATION_ENABLED=true).
+    from app.federation import federation_loop
+    federation_task = asyncio.create_task(federation_loop())
+    if settings.federation_enabled:
+        log.info("Federation enabled — node=%s", settings.federation_node_id or "<hostname>")
+
     # Note: the code-context inotify watcher lives in the host (see
     # scripts/nexus-code-watch.sh) because the container's /app is a
     # read-only bind mount. We don't start the watcher inside the
@@ -606,6 +627,9 @@ async def lifespan(app: FastAPI):
     scheduler_task.cancel()
     push_daemon.stop()
     push_task.cancel()
+    federation_task.cancel()
+    if embedded_worker_task:
+        embedded_worker_task.cancel()
     await redis_client.aclose()
     await engine.dispose()
     log.info("Nexus stopped")
@@ -672,6 +696,8 @@ app.include_router(adopted_router,                     tags=["adopted"], depende
 app.include_router(mind_router,                        tags=["mind"],    dependencies=[Depends(_verify_key)])
 app.include_router(layers_router,                      tags=["layers"], dependencies=[Depends(_verify_key)])
 app.include_router(code_router,                        tags=["code"],   dependencies=[Depends(_verify_key)])
+# Federation routes authenticate by HMAC signature, not the agent Bearer secret.
+app.include_router(federation_router, prefix="/v1/federation", tags=["federation"])
 
 
 # Serve the built React/Vite dashboard at /app (when present).  The bundle is
@@ -785,6 +811,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}.app{height:100%
       <button data-tab="sessions" onclick="switchTab('sessions')">◷ Sessions</button>
       <button data-tab="recalllab" onclick="switchTab('recalllab')">◬ Recall Lab</button>
       <button data-tab="ops" onclick="switchTab('ops')">⚡ Operations</button>
+      <button data-tab="quality" onclick="switchTab('quality')">◍ Memory Quality</button>
       <button data-tab="console" onclick="switchTab('console')">⌁ Neural Console</button>
     </nav>
     <section class="sidePanel"><h3 class="sideTitle">Agent Channels</h3><div class="agentList" id="agent-list"></div></section>
@@ -845,6 +872,8 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}.app{height:100%
 
     <section id="tab-ops" class="tabs console"><div class="statGrid"><div class="stat"><div class="lbl">Sessions</div><div class="val" id="o-sessions">…</div><div class="sig">RAW/CTX</div></div><div class="stat"><div class="lbl">Messages</div><div class="val" id="o-messages">…</div><div class="sig">EVENT/LOG</div></div><div class="stat"><div class="lbl">RTK Saved</div><div class="val" id="o-rtk-tokens">…</div><div class="sig">TOKENS</div></div><div class="stat"><div class="lbl">RTK Failures</div><div class="val" id="o-rtk-fail">…</div><div class="sig">24H</div></div></div><div class="overviewGrid"><div class="panel"><h3>RTK By Agent</h3><div class="consoleOut" id="ops-rtk-agents">Loading…</div></div><div class="panel"><h3>Recent Events</h3><div class="consoleOut" id="ops-events">Loading…</div></div></div></section>
 
+    <section id="tab-quality" class="tabs console"><div class="statGrid"><div class="stat"><div class="lbl">Active Memories</div><div class="val" id="q-total">…</div><div class="sig">LIVE</div></div><div class="stat"><div class="lbl">Avg Confidence</div><div class="val" id="q-confidence">…</div><div class="sig">0–1</div></div><div class="stat"><div class="lbl">Avg Importance</div><div class="val" id="q-importance">…</div><div class="sig">0–1</div></div><div class="stat"><div class="lbl">Superseded</div><div class="val" id="q-superseded">…</div><div class="sig">REPLACED</div></div></div><div class="overviewGrid"><div class="panel"><h3>Confidence Distribution</h3><div id="q-dist" style="display:flex;flex-direction:column;gap:8px;margin-top:8px">Loading…</div></div><div class="panel"><h3>Trust Signals</h3><div class="consoleOut" id="q-trust">Loading…</div></div></div><div class="overviewGrid"><div class="panel"><h3>Memories By Type</h3><div class="type-pills" id="q-types">Loading…</div></div><div class="panel"><h3>Top Agents</h3><div class="consoleOut" id="q-agents">Loading…</div></div></div></section>
+
     <section id="tab-console" class="tabs console"><div class="consoleForm"><input class="field" id="recall-query" placeholder="Ask Nexus recall…"><button class="action" onclick="runRecall()">Recall</button></div><pre class="consoleOut" id="console-output">NEXUS:// console online\nType a query and run recall.</pre></section>
   </main>
 
@@ -855,12 +884,12 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}.app{height:100%
 const TOKEN = "__NEXUS_TOKEN__";
 const LIMIT = 20;
 let state = { agent:null, type:"", query:"", offset:0, total:0, liveCount:0, agents:[], recallReport:null };
-const tabNames = {overview:["Command Overview","Memory Constellation"],vault:["Memory Vault","Recall Archive"],mind:["Living Mind","Reasoning Layer · Identity · Opinions"],agents:["Agent Registry","Channel Topology"],sessions:["Sessions","Raw Timeline · Provenance"],recalllab:["Recall Lab","Mode Comparison · Fusion"],ops:["Operations","RTK · Sessions · Telemetry"],console:["Neural Console","Direct Recall Interface"]};
+const tabNames = {overview:["Command Overview","Memory Constellation"],vault:["Memory Vault","Recall Archive"],mind:["Living Mind","Reasoning Layer · Identity · Opinions"],agents:["Agent Registry","Channel Topology"],sessions:["Sessions","Raw Timeline · Provenance"],recalllab:["Recall Lab","Mode Comparison · Fusion"],ops:["Operations","RTK · Sessions · Telemetry"],quality:["Memory Quality","Health · Confidence · Decay"],console:["Neural Console","Direct Recall Interface"]};
 function apiFetch(path, opts={}){return fetch(path,{...opts,headers:{Authorization:"Bearer "+TOKEN,"Content-Type":"application/json",...(opts.headers||{})}}).then(r=>{if(!r.ok)throw new Error(r.status);return r.json();});}
 function escHtml(s){return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
 function deviceLabel(a){return a?.device||a?.hostname||a?.source||"Unknown Device";}
 function deviceClass(a){return (a?.device||a?.hostname||a?.source)?"deviceChip":"deviceChip unknown";}
-function switchTab(tab){document.querySelectorAll('.tabs').forEach(e=>e.classList.remove('active'));document.getElementById('tab-'+tab).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.getElementById('tab-eyebrow').textContent=tabNames[tab][0];document.getElementById('tab-title').textContent=tabNames[tab][1];if(tab==='vault')loadMemories();if(tab==='mind')loadMind();if(tab==='agents')renderAgentCards();if(tab==='sessions')loadSessions();if(tab==='ops')loadOps();}
+function switchTab(tab){document.querySelectorAll('.tabs').forEach(e=>e.classList.remove('active'));document.getElementById('tab-'+tab).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab));document.getElementById('tab-eyebrow').textContent=tabNames[tab][0];document.getElementById('tab-title').textContent=tabNames[tab][1];if(tab==='vault')loadMemories();if(tab==='mind')loadMind();if(tab==='agents')renderAgentCards();if(tab==='sessions')loadSessions();if(tab==='ops')loadOps();if(tab==='quality')loadQuality();}
 function typeBadgeClass(t){return ({world:'badge-world',experience:'badge-experience',observation:'badge-observation',preference:'badge-preference',lesson:'badge-lesson'}[t]||'badge-other');}
 function fmtDate(dt){if(!dt)return'';const d=new Date(dt);return d.toLocaleDateString()+" "+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}
 function renderMemory(m){const imp=Math.round((m.importance||0)*100);return `<div class="mem-card" id="mc-${m.id}"><div class="mem-header"><span class="type-badge ${typeBadgeClass(m.memory_type)}">${escHtml(m.memory_type)}</span><span class="mem-agent">${escHtml(m.agent_name||m.agent_id||'?')}</span><span class="mem-date">${fmtDate(m.created_at)}</span></div><div class="mem-content">${escHtml(m.content)}</div><div class="mem-footer"><span class="mem-meta">importance ${imp}% <span class="imp-bar"><span class="imp-fill" style="width:${imp}%"></span></span> · accessed ${m.access_count||0}x ${m.confirmed_count?' · ✓ '+m.confirmed_count:''}${m.contradicted_count?' · ⚠ '+m.contradicted_count:''}</span><button class="del-btn" onclick="deleteMemory('${m.id}')">Delete</button></div></div>`;}
@@ -874,6 +903,7 @@ async function loadMind(){try{const d=await apiFetch('/v1/mind/dashboard?mind_id
 
 async function askMind(){const q=document.getElementById('mind-question').value.trim();if(!q)return;const depth=document.getElementById('mind-depth').value;const out=document.getElementById('mind-answer');out.textContent='MIND:// thinking...';try{const d=await apiFetch('/v1/mind/think',{method:'POST',body:JSON.stringify({mind_id:'default',question:q,reasoning_depth:depth})});let out_text='';if(d.answer)out_text+=d.answer+'\n\n';if(d.clarifying_question)out_text+='[Question back: '+d.clarifying_question+']\n\n';out_text+=`[confidence: ${(d.confidence||0).toFixed(2)} | memories: ${(d.memories_cited||[]).length} | proactive items: ${(d.proactive_context||[]).length}]\n`;if((d.proactive_context||[]).length){out_text+='\nProactive context:\n';d.proactive_context.forEach(item=>{out_text+=`  - [${item.type||'?'}] ${item.content||''} (relevance ${(item.relevance||0).toFixed(2)})\n`;});}if((d.opinions_expressed||[]).length){out_text+='\nMy take:\n';d.opinions_expressed.forEach(op=>{out_text+=`  - ${op.topic}: ${op.stance} (strength ${(op.strength||0).toFixed(2)})\n`;});}out.textContent=out_text;}catch(e){out.textContent='MIND:// think failed: '+e.message;}}
 async function loadOps(){try{const [m,r]=await Promise.all([apiFetch('/v1/admin/metrics'),apiFetch('/v1/admin/rtk/summary')]);document.getElementById('o-sessions').textContent=m.totals?.sessions??0;document.getElementById('o-messages').textContent=m.totals?.messages??0;document.getElementById('o-rtk-tokens').textContent=r.tokens_saved_estimate??0;document.getElementById('o-rtk-fail').textContent=r.failures??0;document.getElementById('ops-rtk-agents').textContent=(r.by_agent||[]).map(a=>`${a.agent_id}: ${a.tokens_saved_estimate} tokens · ${a.count} cmds · ${a.failures} failures`).join('\n')||'No RTK telemetry yet.';document.getElementById('ops-events').textContent=(m.recent_events||[]).slice(0,12).map(e=>`${fmtDate(e.created_at)} ${e.action} ${e.actor||''}`).join('\n')||'No recent events.';}catch(e){document.getElementById('ops-events').textContent='Operations load failed: '+e.message;}}
+async function loadQuality(){try{const d=await apiFetch('/v1/admin/memory-quality');document.getElementById('q-total').textContent=d.total_memories??0;document.getElementById('q-confidence').textContent=(d.avg_confidence||0).toFixed(2);document.getElementById('q-importance').textContent=(d.avg_importance||0).toFixed(2);document.getElementById('q-superseded').textContent=d.superseded_count??0;const dist=d.confidence_distribution||{};const max=Math.max(1,...Object.values(dist));const colors={'0.0-0.2':'var(--red,#ff5d73)','0.2-0.4':'#ff9f45','0.4-0.6':'#ffd24a','0.6-0.8':'#66fcf1','0.8-1.0':'var(--green)'};document.getElementById('q-dist').innerHTML=Object.entries(dist).map(([band,n])=>`<div style="display:grid;grid-template-columns:64px 1fr 48px;gap:8px;align-items:center"><span style="font-size:.72rem;color:var(--muted)">${band}</span><span style="background:rgba(255,255,255,.05);height:14px;position:relative"><span style="position:absolute;inset:0 auto 0 0;width:${Math.round(n/max*100)}%;background:${colors[band]||'var(--cyan)'};opacity:.8"></span></span><span style="font-variant-numeric:tabular-nums;text-align:right">${n}</span></div>`).join('')||'No data.';document.getElementById('q-trust').textContent=`Expired (past valid_until): ${d.expired_count??0}\nConfirmations total:        ${d.total_confirmed??0}\nContradictions total:       ${d.total_contradicted??0}`;document.getElementById('q-types').innerHTML=Object.entries(d.memories_by_type||{}).map(([t,n])=>`<span class="pill">${escHtml(t||'?')} <b>${n}</b></span>`).join('')||'No data.';document.getElementById('q-agents').textContent=(d.top_agents_by_memory_count||[]).map(a=>`${(a.agent||'?').padEnd(22)} ${a.count}`).join('\n')||'No agents.';}catch(e){document.getElementById('q-dist').textContent='Memory quality load failed: '+e.message;}}
 async function loadSessions(){const el=document.getElementById('session-list');el.textContent='Loading sessions…';try{const sessions=await apiFetch('/v1/sessions?limit=50');el.innerHTML=(sessions||[]).map(s=>`<div class="agent-item" onclick="showSession('${s.id}')"><span><b>${escHtml(s.title||s.id.slice(0,8))}</b><br><span class="deviceChip">${escHtml(s.agent_id||'?')} · ${escHtml(s.project_key||'-')} · ${s.message_count||0} msgs</span></span><span class="agent-count">${s.ended_at?'✓':'●'}</span></div>`).join('')||'<div class="empty">No sessions archived yet.</div>';}catch(e){el.textContent='Session load failed: '+e.message;}}
 async function showSession(id){const el=document.getElementById('session-detail');el.textContent='Loading session '+id+'…';try{const s=await apiFetch('/v1/sessions/'+encodeURIComponent(id)+'?limit=200');el.textContent=`SESSION: ${s.id}
 AGENT: ${s.agent_id}

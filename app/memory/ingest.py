@@ -15,6 +15,7 @@ from app.config import settings
 from app.models.schema import Memory, Agent
 from app.models.api import MemorySaveRequest, MemorySaveResponse
 from app.embeddings import get_embedding
+from app.db import is_sqlite
 
 log = logging.getLogger("nexus.memory.ingest")
 
@@ -149,7 +150,7 @@ async def save_memory(
         )
 
     memory = Memory(
-        id=uuid.uuid4(),
+        id=str(uuid.uuid4()) if is_sqlite() else uuid.uuid4(),
         agent_id=agent_db_id,
         content=req.content,
         memory_type=memory_type or "observation",
@@ -312,7 +313,17 @@ async def bump_access(db: AsyncSession, memory_ids: List[str]):
     if not memory_ids:
         return
     try:
-        await db.execute(
+        if is_sqlite():
+            placeholders = ", ".join(f":id{i}" for i in range(len(memory_ids)))
+            await db.execute(text(f"""
+                UPDATE memories
+                SET access_count = access_count + 1,
+                    accessed_at = CURRENT_TIMESTAMP,
+                    importance = MIN(1.0, importance + 0.01)
+                WHERE id IN ({placeholders})
+            """), {f"id{i}": value for i, value in enumerate(memory_ids)})
+        else:
+            await db.execute(
             text("""
                 UPDATE memories
                 SET access_count = access_count + 1,
@@ -321,7 +332,7 @@ async def bump_access(db: AsyncSession, memory_ids: List[str]):
                 WHERE id = ANY(CAST(:ids AS uuid[]))
             """),
             {"ids": memory_ids},
-        )
+            )
         await db.commit()
     except Exception as e:
         log.debug("Access bump failed: %s", e)

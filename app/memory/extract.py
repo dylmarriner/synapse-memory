@@ -500,7 +500,8 @@ async def run_worker():
     else:
         log.info("No LLM key — running embedding-only mode")
 
-    redis_client = aioredis.from_url(settings.redis_url)
+    from app.redis_util import make_redis
+    redis_client = make_redis()
     processed_count = [0]
     loop_count = [0]
 

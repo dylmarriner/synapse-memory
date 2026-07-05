@@ -9,6 +9,11 @@ pydantic-settings>=2.0
 python-multipart>=0.0.9
 pgvector>=0.3
 openai>=1.30
+click>=8.1  # `nexus` CLI entrypoint (embedded install mode)
+
+# Embedded mode (EMBEDDED_MODE=true): in-process worker + fakeredis, no Redis service
+fakeredis>=2.20
+aiosqlite>=0.20
 
 fastembed>=0.5.0
 
