@@ -45,6 +45,7 @@ URI_PATTERN = re.compile(
 MEMORY_TYPE_DIRS = frozenset({
     "preferences", "entities", "events", "patterns",
     "cases", "tools", "skills", "trajectories", "experiences",
+    "lessons", "observations",
 })
 
 # Top-level user directories
@@ -147,7 +148,13 @@ def uri_for_peer(agent_name: str, peer_id: str, category: str = "memories") -> s
 
 
 def normalize_uri(uri: str) -> str:
-    """Normalize a URI: remove trailing slash, collapse double slashes."""
+    """Normalize a URI: remove trailing slash, collapse internal double slashes (preserving scheme)."""
+    scheme_end = uri.find("://")
+    if scheme_end >= 0:
+        scheme = uri[:scheme_end + 3]
+        path = uri[scheme_end + 3:]
+        path = re.sub(r"/+", "/", path.rstrip("/"))
+        return scheme + path
     return re.sub(r"/+", "/", uri.rstrip("/"))
 
 

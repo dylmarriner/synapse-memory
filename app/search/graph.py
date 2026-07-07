@@ -39,6 +39,7 @@ async def graph_search(
         SELECT DISTINCT ON (m.id)
                m.id, m.content, m.memory_type, m.agent_id,
                m.importance, m.access_count, m.created_at, m.metadata,
+               m.uri,
                0.6 AS score
         FROM memories m
         JOIN relations r  ON r.memory_id = m.id
@@ -54,7 +55,8 @@ async def graph_search(
         return [
             MemoryResult(
                 id=str(r.id),
-                content=r.content,
+                uri=getattr(r, 'uri', None),
+                content=str(r.content),
                 score=0.6,
                 memory_type=r.memory_type,
                 agent_id=str(r.agent_id) if r.agent_id else None,

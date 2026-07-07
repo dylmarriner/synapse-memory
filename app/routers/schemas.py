@@ -38,7 +38,7 @@ from enum import Enum
 from typing import Optional, Any
 
 import yaml
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, Field, create_model
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -86,11 +86,14 @@ class MemorySchemaDef(BaseModel):
 
 @router.post("/schemas")
 async def create_schema(
-    agent_id: str,
-    schema_yaml: str,
+    agent_id: str = Query(..., description="Agent name"),
     db: AsyncSession = Depends(get_db),
+    body: dict = None,
 ):
     """Register a new memory type schema from YAML."""
+    schema_yaml = body.get("schema_yaml", "") if body else ""
+    if not schema_yaml.strip():
+        raise HTTPException(400, "schema_yaml is required in request body")
     parsed = _parse_schema_yaml(schema_yaml)
     now = datetime.now(timezone.utc)
 
@@ -99,9 +102,11 @@ async def create_schema(
 
     await db.execute(
         text("""INSERT INTO memory_schemas
-                (id, agent_id, memory_type, stage, schema_yaml, description, peer_enabled, created_at, updated_at)
+                (id, agent_id, memory_type, stage, schema_yaml, description, peer_enabled,
+                 is_active, created_at, updated_at)
                 VALUES (gen_random_uuid(), (SELECT id FROM agents WHERE name = :agent),
-                        :mtype, :stage, :yaml, :desc, :peer, :now, :now)
+                        :mtype, :stage, :yaml, :desc, :peer,
+                        TRUE, :now, :now)
                 ON CONFLICT (agent_id, memory_type) DO UPDATE SET
                     schema_yaml = :yaml2, description = :desc2, peer_enabled = :peer2,
                     stage = :stage2, updated_at = :now2

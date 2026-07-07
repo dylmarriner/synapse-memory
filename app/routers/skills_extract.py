@@ -51,10 +51,13 @@ Format: [{{"name": "...", "trigger": "...", "steps": "...", "tags": [...], "impo
 @router.post("/skills/extract")
 async def extract_skills(
     agent_id: str = Query("default"),
-    conversation: str = Query(..., description="Conversation text to analyze"),
     db: AsyncSession = Depends(get_db),
+    body: dict = None,
 ):
     """Extract skills from a conversation using LLM analysis."""
+    conversation = body.get("conversation", "") if body else ""
+    if not conversation.strip():
+        raise HTTPException(400, "conversation is required in request body")
     client = _get_llm()
     if not client:
         # Fallback: basic pattern detection

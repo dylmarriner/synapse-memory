@@ -32,7 +32,7 @@ async def lexical_search(
 
     where = " AND ".join(conditions)
     sql = text(f"""
-        SELECT id, content, memory_type, agent_id, importance, access_count, created_at, metadata,
+        SELECT id, uri, content, memory_type, agent_id, importance, access_count, created_at, metadata,
                ts_rank(to_tsvector('english', content), plainto_tsquery('english', :query)) AS score
         FROM memories
         WHERE {where}
@@ -46,6 +46,7 @@ async def lexical_search(
         return [
             MemoryResult(
                 id=str(r.id),
+                uri=getattr(r, 'uri', None),
                 content=r.content,
                 score=float(r.score),
                 memory_type=r.memory_type,

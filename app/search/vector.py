@@ -39,7 +39,7 @@ async def vector_search(
     where = " AND ".join(conditions)
     dims = settings.embedding_dims
     sql = text(f"""
-        SELECT id, content, memory_type, agent_id, importance, access_count, created_at, metadata,
+        SELECT id, uri, content, memory_type, agent_id, importance, access_count, created_at, metadata,
                1 - (embedding <=> CAST(:emb AS vector({dims}))) AS score
         FROM memories
         WHERE {where}
@@ -53,6 +53,7 @@ async def vector_search(
         return [
             MemoryResult(
                 id=str(r.id),
+                uri=getattr(r, 'uri', None),
                 content=r.content,
                 score=max(0.0, float(r.score)),
                 memory_type=r.memory_type,

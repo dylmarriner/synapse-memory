@@ -40,6 +40,7 @@ class AgentLearnRequest(BaseModel):
 
 class MemoryResult(BaseModel):
     id: str
+    uri: str | None = None
     content: str
     score: float = 0.0
     memory_type: str = "observation"

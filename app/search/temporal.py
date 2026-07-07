@@ -41,7 +41,7 @@ async def temporal_search(
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     sql = text(f"""
-        SELECT id, content, memory_type, agent_id, importance, access_count, created_at, metadata,
+        SELECT id, uri, content, memory_type, agent_id, importance, access_count, created_at, metadata,
                (importance * 0.5 +
                 LEAST(1.0, EXTRACT(EPOCH FROM (NOW() - created_at)) / -86400.0 + 1.0) * 0.3 +
                 LEAST(1.0, access_count / 10.0) * 0.2) AS score
@@ -57,6 +57,7 @@ async def temporal_search(
         return [
             MemoryResult(
                 id=str(r.id),
+                uri=getattr(r, 'uri', None),
                 content=r.content,
                 score=max(0.0, float(r.score)),
                 memory_type=r.memory_type,
