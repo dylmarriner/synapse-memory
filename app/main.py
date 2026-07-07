@@ -53,6 +53,10 @@ from app.routers.stream import router as stream_router
 from app.mcp import mcp_router
 from app.routers.sys_bridge import router as sys_bridge_router
 from app.routers.synapse import router as synapse_router
+from app.routers.vfs import router as vfs_router
+from app.routers.schemas import router as schemas_router
+from app.routers.skills_extract import router as skills_router
+from app.routers.retrieval import router as retrieval_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -171,6 +175,92 @@ async def _run_migrations():
         except Exception as e:
             log.warning("Agent device metadata backfill skipped: %s", e)
 
+        # ── OpenViking-inspired tables: memory_schemas, skills, directory_nodes ──
+
+        for ov_sql in [
+            """CREATE TABLE IF NOT EXISTS memory_schemas (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                agent_id    UUID REFERENCES agents(id) ON DELETE CASCADE,
+                memory_type TEXT NOT NULL,
+                stage       TEXT NOT NULL DEFAULT 'user',
+                schema_yaml TEXT NOT NULL,
+                description TEXT,
+                peer_enabled BOOLEAN NOT NULL DEFAULT true,
+                is_active   BOOLEAN NOT NULL DEFAULT true,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (agent_id, memory_type)
+            )""",
+            """CREATE TABLE IF NOT EXISTS skills (
+                id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                agent_id      UUID REFERENCES agents(id) ON DELETE CASCADE,
+                name          TEXT NOT NULL,
+                description   TEXT,
+                trigger       TEXT,
+                steps         TEXT,
+                content       TEXT NOT NULL,
+                tags          JSONB NOT NULL DEFAULT '[]',
+                source_session TEXT,
+                usage_count   INT NOT NULL DEFAULT 0,
+                version       INT NOT NULL DEFAULT 1,
+                is_active     BOOLEAN NOT NULL DEFAULT true,
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (agent_id, name)
+            )""",
+            """CREATE TABLE IF NOT EXISTS directory_nodes (
+                id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                uri         TEXT NOT NULL UNIQUE,
+                parent_uri  TEXT,
+                name        TEXT NOT NULL,
+                entry_type  TEXT NOT NULL DEFAULT 'directory',
+                is_leaf     BOOLEAN NOT NULL DEFAULT false,
+                description TEXT,
+                child_count INT NOT NULL DEFAULT 0,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )""",
+        ]:
+            try:
+                await conn.execute(text(ov_sql.strip()))
+            except Exception as e:
+                log.warning("OV table create skipped: %s", e)
+
+        for ov_idx in [
+            "CREATE INDEX IF NOT EXISTS idx_memory_schemas_type ON memory_schemas(memory_type)",
+            "CREATE INDEX IF NOT EXISTS idx_memory_schemas_agent_type ON memory_schemas(agent_id, memory_type)",
+            "CREATE INDEX IF NOT EXISTS idx_skills_agent ON skills(agent_id)",
+            "CREATE INDEX IF NOT EXISTS idx_skills_tags ON skills USING gin(tags)",
+            "CREATE INDEX IF NOT EXISTS idx_skills_active ON skills(is_active)",
+            "CREATE INDEX IF NOT EXISTS idx_directory_nodes_uri ON directory_nodes(uri)",
+            "CREATE INDEX IF NOT EXISTS idx_directory_nodes_parent ON directory_nodes(parent_uri)",
+        ]:
+            try:
+                await conn.execute(text(ov_idx))
+            except Exception as e:
+                log.warning("OV index skip: %s", e)
+
+        # Add new columns to memories if upgrading
+        for col_sql in [
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS uri TEXT",
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS parent_uri TEXT",
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS abstract TEXT",
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS overview TEXT",
+            "ALTER TABLE memories ADD COLUMN IF NOT EXISTS level INT NOT NULL DEFAULT 2",
+        ]:
+            try:
+                await conn.execute(text(col_sql))
+            except Exception:
+                pass
+        for mem_idx in [
+            "CREATE INDEX IF NOT EXISTS idx_memories_uri ON memories(uri)",
+            "CREATE INDEX IF NOT EXISTS idx_memories_parent_uri ON memories(parent_uri)",
+        ]:
+            try:
+                await conn.execute(text(mem_idx))
+            except Exception:
+                pass
+
 
 async def _ensure_global_agent():
     """Ensure the 'global' shared pool agent exists."""
@@ -260,6 +350,10 @@ app.include_router(stream_router,  prefix="/v1",         tags=["stream"])  # aut
 app.include_router(mcp_router,        prefix="/mcp",           tags=["mcp"],        dependencies=[Depends(_verify_key)])
 app.include_router(sys_bridge_router,  prefix="/v1/sys",  tags=["sys"],  dependencies=[Depends(_verify_key)])
 app.include_router(synapse_router, prefix="/v1/synapse", tags=["synapse"], dependencies=[Depends(_verify_key)])
+app.include_router(vfs_router, prefix="/v1", tags=["vfs"], dependencies=[Depends(_verify_key)])
+app.include_router(schemas_router, prefix="/v1", tags=["schemas"], dependencies=[Depends(_verify_key)])
+app.include_router(skills_router, prefix="/v1", tags=["skills"], dependencies=[Depends(_verify_key)])
+app.include_router(retrieval_router, prefix="/v1", tags=["retrieval"], dependencies=[Depends(_verify_key)])
 
 
 @app.get("/.well-known/nexus/openapi.json", include_in_schema=False)

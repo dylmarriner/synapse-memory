@@ -1,5 +1,6 @@
 """Memory ingestion — save to DB, queue background extraction, broadcast to SSE."""
 
+import hashlib
 import json
 import logging
 import socket
@@ -26,6 +27,18 @@ async def save_memory(
 ) -> MemorySaveResponse:
     """Save a memory, attempt immediate embedding, queue LLM extraction, broadcast."""
     agent = await _ensure_agent(db, req.agent_id)
+
+    # Generate URI from agent + type + content hash
+    from app.vfs import uri_for_memory
+    content_hash = hashlib.sha256(req.content.encode()).hexdigest()[:12]
+    memory_type = req.memory_type or "observation"
+    uri = uri_for_memory(req.agent_id, memory_type, content_hash)
+    parent_uri = "/".join(uri.split("/")[:-1])
+
+    # Extract abstract (L0) — first sentence or first 120 chars
+    abstract = req.content.strip().split(".")[0][:120] if req.content else ""
+    if len(abstract) < 10:
+        abstract = req.content[:120]
 
     meta = dict(req.metadata)
     if req.tags:
@@ -67,7 +80,11 @@ async def save_memory(
     memory = Memory(
         id=uuid.uuid4(),
         agent_id=agent_db_id,
+        uri=uri,
+        parent_uri=parent_uri,
         content=req.content,
+        abstract=abstract,
+        level=2,  # L2 = full content
         memory_type=req.memory_type or "observation",
         embedding=embedding,
         importance=importance,

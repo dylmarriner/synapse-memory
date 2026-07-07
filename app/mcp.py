@@ -580,7 +580,90 @@ TOOLS = [
         "name": "synapse_compat_health",
         "description": "Health check for synapse-compat tables.",
         "inputSchema": {"type": "object", "properties": {}},
-    },]
+    },
+    {
+        "name": "fs_ls",
+        "description": "List contents of a synapse:// URI directory — explore memory hierarchy",
+        "inputSchema": {"type": "object", "properties": {
+            "uri": {"type": "string", "default": "synapse://", "description": "Directory URI to list"},
+            "limit": {"type": "integer", "default": 200},
+        }},
+    },
+    {
+        "name": "fs_tree",
+        "description": "Show full directory tree from a synapse:// URI",
+        "inputSchema": {"type": "object", "properties": {
+            "uri": {"type": "string", "default": "synapse://"},
+            "depth": {"type": "integer", "default": 3},
+        }},
+    },
+    {
+        "name": "fs_mkdir",
+        "description": "Create a directory node in the virtual filesystem",
+        "inputSchema": {"type": "object", "properties": {
+            "uri": {"type": "string", "description": "Directory URI to create"},
+            "description": {"type": "string"},
+        }},
+    },
+    {
+        "name": "schema_register",
+        "description": "Register a YAML memory type schema for custom extraction",
+        "inputSchema": {"type": "object", "properties": {
+            "agent_id": {"type": "string", "default": "default"},
+            "schema_yaml": {"type": "string", "description": "YAML schema definition"},
+        }},
+    },
+    {
+        "name": "schema_list",
+        "description": "List registered memory schemas",
+        "inputSchema": {"type": "object", "properties": {
+            "agent_id": {"type": "string"},
+        }},
+    },
+    {
+        "name": "skills_extract",
+        "description": "Extract reusable skills from conversation text",
+        "inputSchema": {"type": "object", "properties": {
+            "agent_id": {"type": "string", "default": "default"},
+            "conversation": {"type": "string", "description": "Conversation text to analyze"},
+        }},
+    },
+    {
+        "name": "skills_list",
+        "description": "List all extracted skills",
+        "inputSchema": {"type": "object", "properties": {
+            "agent_id": {"type": "string"},
+            "tag": {"type": "string"},
+        }},
+    },
+    {
+        "name": "skills_use",
+        "description": "Record a skill usage",
+        "inputSchema": {"type": "object", "properties": {
+            "skill_name": {"type": "string"},
+            "agent_id": {"type": "string", "default": "default"},
+        }},
+    },
+    {
+        "name": "context_build",
+        "description": "Build a tiered context pack for an agent (L0 abstracts + L1 overviews + L2 content)",
+        "inputSchema": {"type": "object", "properties": {
+            "agent_id": {"type": "string", "default": "default", "description": "Agent to build context for"},
+            "token_budget": {"type": "integer", "default": 2000, "description": "Estimated token budget"},
+            "focus_types": {"type": "string", "description": "Comma-separated memory types to include"},
+        }},
+    },
+    {
+        "name": "dir_search",
+        "description": "Search within a specific synapse:// directory",
+        "inputSchema": {"type": "object", "properties": {
+            "query": {"type": "string"},
+            "directory_uri": {"type": "string", "default": "synapse://"},
+            "limit": {"type": "integer", "default": 10},
+            "memory_type": {"type": "string"},
+        }},
+    },
+]
 
 async def _dispatch(tool: str, args: dict, request: Request) -> str:
     import httpx
@@ -1219,6 +1302,108 @@ async def _dispatch(tool: str, args: dict, request: Request) -> str:
             r.raise_for_status()
             d = r.json()
             return f"Synapse compat health: projects={d['projects']} files={d['files']} events={d['events']}"
+
+        elif tool == "fs_ls":
+            r = await client.get(f"{base}/v1/fs/ls", params=args, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+            lines = [f"Directory: {d['uri']}  ({d['count']} entries)\n"]
+            for e in d.get("entries", []):
+                icon = "📁" if e.get("entry_type") == "directory" else "📄"
+                cc = f" ({e.get('child_count', '')})" if e.get("child_count") else ""
+                desc = f"  — {e.get('description', '')}" if e.get("description") else ""
+                lines.append(f"  {icon} {e['name']}{cc}{desc}")
+            return "\n".join(lines)
+
+        elif tool == "fs_tree":
+            r = await client.get(f"{base}/v1/fs/tree", params=args, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+
+            def _render_tree(node, indent=0):
+                prefix = "  " * indent
+                lines = []
+                name = node.get("name", "?")
+                if node.get("children"):
+                    lines.append(f"{prefix}📁 {name}/")
+                    for c in node.get("children", []):
+                        lines.extend(_render_tree(c, indent + 1))
+                else:
+                    if node.get("truncated"):
+                        lines.append(f"{prefix}… (truncated)")
+                    else:
+                        lines.append(f"{prefix}📁 {name}/")
+                return lines
+
+            return "\n".join(_render_tree(d.get("tree", {})))
+
+        elif tool == "fs_mkdir":
+            r = await client.post(f"{base}/v1/fs/mkdir", params={"uri": args.get("uri", ""), "description": args.get("description", "")}, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+            return f"Created directory: {d['uri']}"
+
+        elif tool == "schema_register":
+            r = await client.post(f"{base}/v1/schemas", params={"agent_id": args.get("agent_id", "default")}, json={"schema_yaml": args.get("schema_yaml", "")}, headers=headers)
+            r.raise_for_status()
+            return f"Schema registered for '{args.get('agent_id', 'default')}'"
+
+        elif tool == "schema_list":
+            r = await client.get(f"{base}/v1/schemas", params=args, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+            if not d.get("schemas"):
+                return "No schemas registered."
+            lines = [f"Memory Schemas ({d['count']}):"]
+            for s in d["schemas"]:
+                lines.append(f"  {s['memory_type']} — {s.get('description', '')[:80]}")
+            return "\n".join(lines)
+
+        elif tool == "skills_extract":
+            r = await client.post(f"{base}/v1/skills/extract", params={"agent_id": args.get("agent_id", "default")}, json={"conversation": args.get("conversation", "")}, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+            return f"Extracted {d['extracted']} skills from conversation."
+
+        elif tool == "skills_list":
+            r = await client.get(f"{base}/v1/skills", params=args, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+            if not d.get("skills"):
+                return "No skills extracted."
+            lines = [f"Skills ({d['count']}):"]
+            for s in d["skills"]:
+                tag_str = f" [{', '.join(s.get('tags', []))}]" if s.get("tags") else ""
+                uses = f" ({s.get('usage_count', 0)} uses)" if s.get("usage_count") else ""
+                lines.append(f"  {s['name']}{tag_str}{uses}")
+            return "\n".join(lines)
+
+        elif tool == "skills_use":
+            r = await client.post(f"{base}/v1/skills/{args['skill_name']}/use", params={"agent_id": args.get("agent_id", "default")}, headers=headers)
+            r.raise_for_status()
+            return f"Skill '{args['skill_name']}' use recorded."
+
+        elif tool == "context_build":
+            r = await client.get(f"{base}/v1/search/context", params=args, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+            lines = [f"Context pack for '{d['agent_id']}' ({d['total_entries']} entries, budget: {args.get('token_budget', 2000)}):\n"]
+            for level, data in sorted(d.get("levels", {}).items()):
+                lines.append(f"  {level}: {data['count']} entries")
+                for e in data.get("entries", [])[:5]:
+                    lines.append(f"    [{e.get('memory_type', '?')}] {e.get('content', '')[:120]}")
+            return "\n".join(lines)
+
+        elif tool == "dir_search":
+            r = await client.post(f"{base}/v1/search/dir", params=args, headers=headers)
+            r.raise_for_status()
+            d = r.json()
+            if not d.get("results"):
+                return f"No results in '{args.get('directory_uri', 'synapse://')}'"
+            lines = [f"Found {d['total']} results in '{d['directory_uri']}':"]
+            for res in d["results"][:10]:
+                lines.append(f"  [{res['memory_type']}] {res.get('content', '')[:200]}")
+            return "\n".join(lines)
 
         else:
             raise HTTPException(status_code=404, detail=f"Unknown tool: {tool}")
