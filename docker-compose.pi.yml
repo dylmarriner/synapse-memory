@@ -1,0 +1,121 @@
+name: nexus-pi
+
+# Raspberry Pi / low-power deployment.
+# Runs Nexus + PostgreSQL/pgvector + Redis + in-process FastEmbed embeddings.
+# No local LLM service is started here. The Pi handles memory and embeddings,
+# not full chat/code generation. We are being practical, deeply upsetting though that is.
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg17
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexuspassword}
+      POSTGRES_DB: nexus
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    ports:
+      - "127.0.0.1:5435:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.2.2-alpine
+    ports:
+      - "127.0.0.1:6381:6379"
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  nexus-api:
+    build: .
+    volumes:
+      - .:/app:ro
+      - ./data/fastembed:/tmp/fe_cache
+      - ./data/hf:/tmp/hf_home
+      - ./data/xet:/tmp/xet_cache
+    ports:
+      - "0.0.0.0:${NEXUS_PORT:-7777}:7777"
+    environment:
+      NEXUS_SECRET: ${NEXUS_SECRET}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      DATABASE_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD:-nexuspassword}@postgres:5432/nexus
+      REDIS_URL: redis://redis:6379/0
+
+      # Pi default: keep embeddings local and free.
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      EMBEDDING_DIMS: ${EMBEDDING_DIMS:-384}
+      LOCAL_EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      LOCAL_EMBEDDING_CACHE_DIR: ${LOCAL_EMBEDDING_CACHE_DIR:-/tmp/fe_cache}
+      EMBEDDING_TIMEOUT_SECONDS: ${EMBEDDING_TIMEOUT_SECONDS:-20}
+
+      # Keep LLM-dependent behaviour off by default on Pi.
+      LLM_ENABLED: ${LLM_ENABLED:-false}
+      MIND_ENABLED: ${MIND_ENABLED:-false}
+      MIND_REFLECTION_ENABLED: ${MIND_REFLECTION_ENABLED:-false}
+      LLM_QUERY_EXPANSION: ${LLM_QUERY_EXPANSION:-false}
+      RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
+      USE_ACTIVE_MEMORY: ${USE_ACTIVE_MEMORY:-false}
+
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      NEXUS_DISABLE_AUTH: ${NEXUS_DISABLE_AUTH:-false}
+      RECALL_MIN_RELEVANCE: ${RECALL_MIN_RELEVANCE:-0.0}
+      CONTEXT_MEMORY_LIMIT: ${CONTEXT_MEMORY_LIMIT:-10}
+      CONTEXT_MEMORY_CHAR_LIMIT: ${CONTEXT_MEMORY_CHAR_LIMIT:-200}
+      CONTEXT_CONCLUSION_LIMIT: ${CONTEXT_CONCLUSION_LIMIT:-5}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  nexus-worker:
+    build: .
+    volumes:
+      - .:/app:ro
+      - ./data/fastembed:/tmp/fe_cache
+      - ./data/hf:/tmp/hf_home
+      - ./data/xet:/tmp/xet_cache
+    environment:
+      NEXUS_SECRET: ${NEXUS_SECRET}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      DATABASE_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD:-nexuspassword}@postgres:5432/nexus
+      REDIS_URL: redis://redis:6379/0
+
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      EMBEDDING_DIMS: ${EMBEDDING_DIMS:-384}
+      LOCAL_EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      LOCAL_EMBEDDING_CACHE_DIR: ${LOCAL_EMBEDDING_CACHE_DIR:-/tmp/fe_cache}
+      EMBEDDING_TIMEOUT_SECONDS: ${EMBEDDING_TIMEOUT_SECONDS:-20}
+
+      LLM_ENABLED: ${LLM_ENABLED:-false}
+      MIND_ENABLED: ${MIND_ENABLED:-false}
+      MIND_REFLECTION_ENABLED: ${MIND_REFLECTION_ENABLED:-false}
+      LLM_QUERY_EXPANSION: ${LLM_QUERY_EXPANSION:-false}
+      RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
+      LLM_COST_SAVER: ${LLM_COST_SAVER:-true}
+      LLM_INPUT_CHAR_LIMIT: ${LLM_INPUT_CHAR_LIMIT:-1200}
+      LLM_EXTRACT_MAX_TOKENS: ${LLM_EXTRACT_MAX_TOKENS:-180}
+      LLM_SUMMARY_MAX_TOKENS: ${LLM_SUMMARY_MAX_TOKENS:-220}
+      LLM_REFLECT_MAX_TOKENS: ${LLM_REFLECT_MAX_TOKENS:-300}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python", "/app/app/worker.py"]
+    restart: unless-stopped
