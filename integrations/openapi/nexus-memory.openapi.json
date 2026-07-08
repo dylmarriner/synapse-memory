@@ -3,7 +3,7 @@
   "info": {
     "title": "Nexus Universal Agent Memory API",
     "version": "1.0.0",
-    "description": "Universal long-term memory for AI agents. Supports save, batch save, recall, reflection, context, agent registry, transfer, export, and health. Authenticate with Authorization: Bearer <NEXUS_SECRET>."
+    "description": "Universal long-term memory for AI agents. Supports save, batch save, recall, deterministic reflection, context, agent registry, transfer, export, and health. Authenticate with Authorization: Bearer <NEXUS_SECRET>."
   },
   "servers": [
     { "url": "http://100.93.75.87:7777", "description": "Tailscale Nexus" },
@@ -64,7 +64,7 @@
       "post": { "operationId": "memoryRecall", "summary": "Recall relevant memories", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MemoryRecallRequest" } } } }, "responses": { "200": { "description": "Recall results" } } }
     },
     "/v1/memory/reflect": {
-      "post": { "operationId": "memoryReflect", "summary": "Synthesize memories into reflection", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MemoryReflectRequest" } } } }, "responses": { "200": { "description": "Reflection" } } }
+      "post": { "operationId": "memoryReflect", "summary": "Deterministically reflect over memories", "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MemoryReflectRequest" } } } }, "responses": { "200": { "description": "Reflection" } } }
     },
     "/v1/agents/{agent_id}/context": {
       "get": { "operationId": "agentContext", "summary": "Get token-budgeted agent context", "parameters": [{ "name": "agent_id", "in": "path", "required": true, "schema": { "type": "string" } }, { "name": "tokens", "in": "query", "schema": { "type": "integer", "default": 2000 } }], "responses": { "200": { "description": "Agent context" } } }

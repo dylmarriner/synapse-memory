@@ -80,32 +80,6 @@ async def _search_in_own_session(fn, *args):
 
 @router.post("/save", response_model=MemorySaveResponse)
 async def save(body: MemorySaveRequest, request: Request, db: AsyncSession = Depends(get_db)):
-    # Active-memory mode: route through the Living Mind.  The mind
-    # processes the memory (entities, opinions, identity updates) and
-    # then saves it.  Set USE_ACTIVE_MEMORY=1 to enable.
-    import os
-    if os.environ.get("USE_ACTIVE_MEMORY", "").lower() in ("1", "true", "yes"):
-        try:
-            from app.mind.active import MemoryRouter
-            from app.routers.mind import _get_mind
-            mind = _get_mind("default")
-            router = MemoryRouter(mind)
-            response = await router.save(
-                content=body.content,
-                agent_id=body.agent_id,
-                memory_type=body.memory_type,
-                importance=body.importance,
-                tags=body.tags,
-            )
-            # Wrap into the standard response shape.
-            return MemorySaveResponse(
-                id=response["id"],
-                classified_type=response.get("memory_type", "observation"),
-                extraction_queued=False,
-                deduplicated=False,
-            )
-        except Exception as e:
-            log.debug("active memory save failed, falling back: %s", e)
     result = await save_memory(db, request.app.state.redis, body)
     # Auto-link the new memory to any code symbols it mentions.
     try:
@@ -138,57 +112,8 @@ async def recall(body: MemoryRecallRequest):
     searches are sparse, unless the caller explicitly requests only secondary
     modes.
 
-    Active-memory mode: when USE_ACTIVE_MEMORY=1, route through the
-    Living Mind which returns a *reasoned* response — the agent gets
-    the mind's answer, the memories it cited, and any proactive
-    context, instead of just a flat memory list.
+    This endpoint is now always direct recall against the memory store.
     """
-    import os
-    if os.environ.get("USE_ACTIVE_MEMORY", "").lower() in ("1", "true", "yes"):
-        try:
-            from app.mind.active import MemoryRouter
-            from app.routers.mind import _get_mind
-            from app.models.api import MemoryResult
-            mind = _get_mind("default")
-            router = MemoryRouter(mind)
-            reasoned = await router.recall(
-                query=body.query,
-                agent_id=body.agent_id,
-                limit=body.limit,
-                reasoning_depth="deep",
-            )
-            # Map the mind's reasoned response into the standard recall shape
-            # so existing clients keep working, while the reasoned answer,
-            # proactive context, and trace ride along in the optional fields.
-            cited = reasoned.get("memories_cited") or []
-            results = [
-                MemoryResult(
-                    id=str(m.get("id") or ""),
-                    content=m.get("content") or m.get("text") or "",
-                    score=float(m.get("score", 0.0) or 0.0),
-                    relevance=float(m.get("relevance", 0.0) or 0.0),
-                    memory_type=m.get("memory_type", "observation"),
-                    importance=float(m.get("importance", 0.5) or 0.5),
-                    agent_id=str(m.get("agent_id") or "") or None,
-                    confidence=float(m.get("confidence", 1.0) or 1.0),
-                    metadata=m.get("metadata") or {},
-                    matched_by=list(m.get("matched_by") or []),
-                )
-                for m in cited
-                if isinstance(m, dict) and m.get("id")
-            ]
-            return MemoryRecallResponse(
-                results=results,
-                total=len(results),
-                modes_used=["mind"],
-                fusion="mind",
-                mind_answer=reasoned.get("answer"),
-                mind_confidence=reasoned.get("confidence"),
-                proactive_context=reasoned.get("proactive_context") or [],
-                reasoning_trace=reasoned.get("reasoning_trace"),
-            )
-        except Exception as e:
-            log.debug("active memory recall failed, falling back: %s", e)
     if is_trivial_query(body.query):
         return MemoryRecallResponse(results=[], total=0, modes_used=[])
 

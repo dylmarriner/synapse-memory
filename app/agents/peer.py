@@ -1,4 +1,4 @@
-"""Agent peer management — identity, LLM representation, rolling summaries."""
+"""Agent peer management — identity, deterministic representation, rolling summaries."""
 
 import logging
 import socket
@@ -7,22 +7,7 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-
 log = logging.getLogger("nexus.agents.peer")
-
-_REPRESENT_PROMPT = """Build a concise, dense representation of this agent based on what is known about them.
-
-Agent: {name}
-
-Conclusions:
-{conclusions}
-
-Recent important memories:
-{memories}
-
-Write 3-5 sentences: who they are, what they know, their preferences, and their behavioral patterns.
-Be specific — avoid vague generalities."""
 
 
 async def get_or_create(db: AsyncSession, name: str) -> dict:
@@ -63,12 +48,7 @@ async def ensure_global_agent(db: AsyncSession):
 
 
 async def build_representation(db: AsyncSession, agent_name: str) -> Optional[str]:
-    """Generate and store an LLM representation of an agent."""
-    from app.llm import get_llm_client
-    client = get_llm_client()
-    if client is None:
-        return None
-
+    """Generate and store a deterministic representation of an agent."""
     try:
         c_rows = await db.execute(text("""
             SELECT c.content FROM conclusions c
@@ -89,17 +69,14 @@ async def build_representation(db: AsyncSession, agent_name: str) -> Optional[st
         if not conclusions and not memories:
             return None
 
-        resp = await client.chat.completions.create(
-            model=settings.llm_model,
-            messages=[{"role": "user", "content": _REPRESENT_PROMPT.format(
-                name=agent_name,
-                conclusions="\n".join(f"- {c}" for c in conclusions) or "(none yet)",
-                memories="\n".join(f"- {m}" for m in memories) or "(none yet)",
-            )}],
-            max_tokens=min(180, settings.llm_summary_max_tokens),
-            temperature=0.2,
-        )
-        representation = resp.choices[0].message.content.strip()
+        conclusion_text = "; ".join(conclusions[:3])
+        memory_text = "; ".join(memories[:4])
+        parts = [f"Agent '{agent_name}' has {len(conclusions)} stored conclusions and {len(memories)} recent high-value memories."]
+        if conclusion_text:
+            parts.append(f"Current conclusions: {conclusion_text}")
+        if memory_text:
+            parts.append(f"Recent evidence: {memory_text}")
+        representation = " ".join(parts)[:1200]
 
         await db.execute(
             text("UPDATE agents SET representation = :rep, represented_at = NOW() WHERE name = :name"),

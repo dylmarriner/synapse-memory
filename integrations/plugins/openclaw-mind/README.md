@@ -1,6 +1,7 @@
 # OpenClaw + Living Mind
 
-Wires OpenClaw to a running Nexus server's Living Mind.
+Legacy integration for the optional Living Mind layer. Default Nexus
+deployments now use direct agent-to-memory interaction.
 
 ## Install
 

@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     llm_model: str = "deepseek-chat"
     embedding_dims: int = 384
+    llm_enabled: bool = False
 
     # Living Mind reasoning models.  The mind reasons with a local Ollama model
     # (fast, on-GPU, no API cost) and falls back to a DeepSeek model when the
@@ -31,6 +32,7 @@ class Settings(BaseSettings):
     mind_llm_model: str = "qwen2.5-3b-instruct"
     mind_fallback_model: str = "deepseek-chat"
     ollama_base_url: str = "http://172.20.0.1:11434/v1"
+    mind_enabled: bool = False
 
     # Multi-step LLM pipeline (PR #10).  Each setting enables one
     # capability of the new LLM-driven pipeline.  Disable any of these
@@ -47,7 +49,7 @@ class Settings(BaseSettings):
     # opinions.  Proactive pushes only fire when a reflection crosses the
     # novelty/confidence threshold below, so the push stream stays quiet
     # unless something is actually notable.
-    mind_reflection_enabled: bool = True
+    mind_reflection_enabled: bool = False
     mind_reflection_mind_id: str = "nexus"
     mind_reflection_interval_seconds: int = 1800
     mind_reflection_lookback_memories: int = 50
@@ -65,11 +67,11 @@ class Settings(BaseSettings):
     llm_synthesis_max_tokens: int = 450
     llm_query_expansion: bool = False
     llm_query_expansion_min_chars: int = 80
-    llm_memory_organizer_enabled: bool = True
+    llm_memory_organizer_enabled: bool = False
     llm_memory_organizer_similarity_threshold: float = 0.72
     llm_memory_organizer_pair_limit: int = 200
     llm_memory_organizer_max_cluster_size: int = 6
-    llm_memory_decompose_enabled: bool = True
+    llm_memory_decompose_enabled: bool = False
     llm_memory_decompose_length_threshold: int = 600
     llm_memory_decompose_batch_limit: int = 10
     context_memory_limit: int = 10

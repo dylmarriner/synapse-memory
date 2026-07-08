@@ -1,9 +1,7 @@
 # Claude Code + Living Mind
 
-Wires Claude Code to a running Nexus server's Living Mind.  The
-agent's system prompt is seeded with the mind's briefing at
-session start, and the mind observes every tool use so it can
-learn and form opinions over time.
+Legacy integration for the optional Living Mind layer. Default Nexus
+deployments now use direct agent-to-memory interaction.
 
 ## What the agent gets
 

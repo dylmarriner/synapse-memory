@@ -1,6 +1,14 @@
 # Nexus Universal Agent Integration
 
-Nexus is now usable by any AI agent that can call **MCP**, **OpenAPI**, **REST**, **plugins**, or **skills/instructions**.
+Nexus is usable by any AI agent that can call **MCP**, **OpenAPI**, **REST**, **plugins**, or **skills/instructions**.
+
+Default runtime:
+
+- direct agent-to-memory interaction
+- no hidden reasoning layer
+- no LLM dependency for core memory operations
+
+The optional Living Mind / LLM layer remains available for legacy integrations, but it is disabled by default.
 
 For cross-computer setup through Tailscale, see
 [`docs/agent-connection-tailscale.md`](docs/agent-connection-tailscale.md).
@@ -52,7 +60,7 @@ By default the installer writes three things per agent:
    `--local` to write project-level instead.
 3. **Skills** — opt-in (`--with-skills`). A reusable `nexus-memory` skill
    installed to `~/.claude/skills/`, `~/.config/opencode/skills/`, and
-   `~/.continue/config.yaml` so the LLM can discover and invoke it.
+   `~/.continue/config.yaml` so agents can discover and invoke it.
 4. **Hooks** — opt-in (`--with-hooks`). Claude Code event hooks
    (SessionStart, UserPromptSubmit, Stop) in `~/.claude/settings.json` for
    auto-recall before each prompt and auto-save after each turn.

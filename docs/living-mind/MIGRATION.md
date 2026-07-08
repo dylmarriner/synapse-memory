@@ -1,18 +1,14 @@
 # Migrating to the Living Mind
 
-The Living Mind is an additive layer on top of the existing Nexus
-memory server.  You can adopt it gradually without disrupting any
-current agent.
+The Living Mind is a legacy optional layer. Nexus runs in direct
+agent-to-memory mode by default, and the mind routes stay disabled
+unless you explicitly enable them.
 
 This guide covers the three common adoption paths:
 
-  1. **Side-by-side** — Mind runs in parallel with the existing
-     memory tools; agents can opt in.
-  2. **Active memory** — Mind transparently wraps every
-     `memory_save` and `memory_recall`; agents get reasoned
-     responses automatically.
-  3. **Replace** — Disable the old direct memory tools; agents
-     use only the mind tools.
+  1. **Side-by-side** — Legacy mode for evaluation; mind runs in parallel with the existing memory tools.
+  2. **Active memory** — Legacy transparent routing; mind wraps `memory_save` and `memory_recall`.
+  3. **Replace** — Legacy mind-only mode; agents use only the mind tools.
 
 ## Path 1: Side-by-side (recommended for evaluation)
 

@@ -53,7 +53,7 @@ TOOLS = [
     },
     {
         "name": "memory_reflect",
-        "description": "LLM-driven deep synthesis over retrieved memories. Returns structured insights, patterns, and conclusions.",
+        "description": "Deterministic synthesis over retrieved memories. Returns a direct evidence summary, memory mix, and cautions.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -67,7 +67,7 @@ TOOLS = [
     },
     {
         "name": "agent_context",
-        "description": "Get everything known about an agent: their LLM-generated representation, recent memories, extracted conclusions, and entity count.",
+        "description": "Get everything known about an agent: stored representation, recent memories, extracted conclusions, and entity count.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -79,7 +79,7 @@ TOOLS = [
     },
     {
         "name": "agent_learn",
-        "description": "Teach an agent something new. Saves immediately with embedding + async LLM extraction.",
+        "description": "Teach an agent something new. Saves immediately with embedding + async deterministic indexing/extraction where available.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -93,7 +93,7 @@ TOOLS = [
     },
     {
         "name": "nexus_status",
-        "description": "Check health of Nexus and all components (postgres, redis, embeddings, LLM).",
+        "description": "Check health of Nexus and all core components (postgres, redis, embeddings, direct agent API mode).",
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     {
@@ -139,7 +139,7 @@ TOOLS = [
     },
     {
         "name": "memory_synthesize",
-        "description": "WHEN TO USE: When you need a comprehensive understanding of a topic based on all stored memories. Uses LLM to synthesize all retrieved memories into a structured knowledge document. More thorough than recall.",
+        "description": "WHEN TO USE: When you need a comprehensive understanding of a topic based on all stored memories. Returns a deterministic structured knowledge summary built from retrieved evidence. More thorough than recall.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -152,7 +152,7 @@ TOOLS = [
     },
     {
         "name": "agent_represent",
-        "description": "WHEN TO USE: After significant new learning or at the start of a session after many memories have accumulated. Triggers an LLM rebuild of the agent's representation — a 3-5 sentence profile used in every context load.",
+        "description": "WHEN TO USE: After significant new learning or at the start of a session after many memories have accumulated. Rebuilds the agent's stored representation from conclusions and recent memories.",
         "inputSchema": {
             "type": "object",
             "properties": {

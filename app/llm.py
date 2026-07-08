@@ -13,6 +13,8 @@ def get_llm_client():
     3. OpenAI when an OpenAI key exists.
     4. Local Ollama as a final fallback when a base URL exists.
     """
+    if not settings.llm_enabled:
+        return None
     model = (settings.llm_model or "").strip().lower()
     if model == "qwen2.5-3b-instruct":
         return get_ollama_client(base_url=settings.ollama_base_url, model=settings.llm_model)

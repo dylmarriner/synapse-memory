@@ -1,28 +1,11 @@
-"""LLM-driven reflection synthesis over recalled memories."""
+"""Deterministic reflection synthesis over recalled memories."""
 
 import logging
 from typing import List, Optional
 
 from app.models.api import MemoryResult, MemoryReflectRequest, MemoryReflectResponse
-from app.llm import get_llm_client
-from app.config import settings
 
 log = logging.getLogger("nexus.memory.reflect")
-
-_PROMPT = """You are a memory synthesis engine. Given a question and a set of retrieved memories, produce a structured reflection.
-
-Question: {query}{ctx}
-
-Retrieved memories ({count}):
-{memories}
-
-Synthesize a clear, insightful reflection that:
-1. Directly answers the question from the evidence
-2. Identifies patterns or recurring themes
-3. Notes contradictions or gaps
-4. Draws actionable conclusions
-
-Be concise and factual."""
 
 
 async def reflect(
@@ -31,39 +14,37 @@ async def reflect(
 ) -> MemoryReflectResponse:
     if not recalled:
         return MemoryReflectResponse(reflection="No relevant memories found.", based_on=[])
+    by_type: dict[str, int] = {}
+    seen_contents: set[str] = set()
+    top_points: list[str] = []
+    for memory in recalled:
+        by_type[memory.memory_type] = by_type.get(memory.memory_type, 0) + 1
+        content = (memory.content or "").strip()
+        if not content:
+            continue
+        key = content.lower()
+        if key in seen_contents:
+            continue
+        seen_contents.add(key)
+        top_points.append(f"- [{memory.memory_type}] {content[:240]}")
+        if len(top_points) >= 8:
+            break
 
-    client = get_llm_client()
-    if client is None:
-        summary = "\n".join(f"- [{m.memory_type}] {m.content}" for m in recalled[:10])
-        return MemoryReflectResponse(
-            reflection=f"Memory summary ({len(recalled)} results):\n{summary}",
-            based_on=recalled[:10],
-        )
-
-    cap = settings.llm_reflect_max_tokens
-    depth_tokens = {"low": min(120, cap), "mid": min(300, cap), "high": min(600, cap)}
-    max_tokens = depth_tokens.get(req.depth, 400)
-
-    mem_text = "\n".join(
-        f"{i+1}. [{m.memory_type}] {m.content[:300]}" for i, m in enumerate(recalled[:10])
-    )
-    ctx_str = f"\nContext: {req.context}" if req.context else ""
-
-    try:
-        resp = await client.chat.completions.create(
-            model=settings.llm_model,
-            messages=[{"role": "user", "content": _PROMPT.format(
-                query=req.query, ctx=ctx_str, count=len(recalled), memories=mem_text
-            )}],
-            max_tokens=max_tokens,
-            temperature=0.3,
-        )
-        text_out = resp.choices[0].message.content.strip()
-        return MemoryReflectResponse(reflection=text_out, based_on=recalled[:10])
-    except Exception as e:
-        log.warning("Reflect LLM call failed: %s", e)
-        fallback = "\n".join(f"- {m.content[:200]}" for m in recalled[:5])
-        return MemoryReflectResponse(
-            reflection=f"Top {min(5, len(recalled))} memories:\n{fallback}",
-            based_on=recalled[:5],
-        )
+    contradictions = [
+        m for m in recalled
+        if (m.contradicted_count or 0) > 0 or (m.metadata or {}).get("failure")
+    ]
+    lines = [f"Reflection for: {req.query}"]
+    if req.context:
+        lines.append(f"Context: {req.context[:240]}")
+    lines.append(f"Evidence count: {len(recalled)}")
+    if by_type:
+        mix = ", ".join(f"{k}={v}" for k, v in sorted(by_type.items()))
+        lines.append(f"Memory mix: {mix}")
+    if top_points:
+        lines.append("Key evidence:")
+        lines.extend(top_points)
+    if contradictions:
+        lines.append(f"Conflicts or cautions: {len(contradictions)} memories are marked contradicted or failure-related.")
+    lines.append("Conclusion: use the key evidence above directly; this endpoint now returns deterministic synthesis only.")
+    return MemoryReflectResponse(reflection="\n".join(lines), based_on=recalled[:10])

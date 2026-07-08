@@ -32,7 +32,7 @@ async def health(request: Request, db: AsyncSession = Depends(get_db)):
 
     s = request.app.state.settings
     components["embeddings"] = bool(s.embedding_model)
-    components["llm"] = bool(s.llm_model or s.mind_llm_model or s.ollama_base_url)
+    components["llm"] = bool(s.llm_enabled)
 
     return HealthResponse(healthy=components["postgres"], components=components)
 
@@ -498,5 +498,4 @@ async def memory_quality(db: AsyncSession = Depends(get_db)):
         "memories_by_type": memories_by_type,
         "top_agents_by_memory_count": top_agents,
     }
-
 

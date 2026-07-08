@@ -1,7 +1,7 @@
 # Hermes + Living Mind
 
-Wires Hermes (Python agent framework) to a running Nexus server's
-Living Mind.  Uses Hermes's native Python plugin system.
+Legacy integration for the optional Living Mind layer. Default Nexus
+deployments now use direct agent-to-memory interaction.
 
 ## Install
 

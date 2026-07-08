@@ -39,11 +39,22 @@
 
 ---
 
-Nexus is a **high-performance shared memory server** for AI agent fleets. It gives every agent on your network instant access to durable, searchable, fused memory — across projects, sessions, devices, and agent types.
+Nexus is a **high-performance shared memory server** for AI agent fleets. It gives every agent on your network direct access to durable, searchable, fused memory across projects, sessions, devices, and agent types.
 
 Powered by **PostgreSQL + pgvector + Redis**, Nexus provides **four parallel search modes** fused by Reciprocal Rank Fusion, delivering sub-50ms recall across thousands of memories.
 
-> **Successor to Synapse Memory** — full backward compatibility with all synapse tools and data models.
+> **Default runtime: direct agent-to-memory mode**
+> The optional Living Mind / LLM layer is disabled by default. Nexus exposes the memory, agent, session, and MCP surfaces directly.
+
+> **Successor to Synapse Memory** — backward compatible with the existing tools and data models.
+
+## Runtime Modes
+
+| Mode | Status | Notes |
+|---|---|---|
+| Direct agent-to-memory | Default | Agents call `memory_*`, `agent_*`, `session_*`, and MCP tools directly. |
+| Living Mind / LLM layer | Disabled by default | Optional legacy layer for teams that explicitly enable it. |
+| Embedded mode | Optional | Runs the extraction worker in-process for low-friction local installs. |
 
 ## ✨ Features
 
@@ -64,7 +75,7 @@ Powered by **PostgreSQL + pgvector + Redis**, Nexus provides **four parallel sea
 - Plugins for Hermes, Cline, OpenCode, Paperclip, OpenClaw
 
 **📊 Agent Registry**
-- Per-agent profiles with LLM-generated representations
+- Per-agent profiles with stored representations derived from conclusions and recent memories
 - Durable conclusions & preferences
 - Cross-session context persistence
 
@@ -85,7 +96,7 @@ Powered by **PostgreSQL + pgvector + Redis**, Nexus provides **four parallel sea
 **⚡ Async Pipeline**
 - Background embedding generation
 - Scheduled memory consolidation
-- LLM-powered reflection & synthesis
+- Deterministic reflection & synthesis
 - Conflict detection & deduplication
 
 **🛡️ Enterprise Ready**
@@ -108,7 +119,7 @@ cd synapse-memory
 
 # Configure
 cp .env.example .env
-# Edit .env — set NEXUS_SECRET and OPENAI_API_KEY
+# Edit .env — set NEXUS_SECRET
 
 # Launch
 docker compose up -d
@@ -174,8 +185,8 @@ Agent → MCP Tool Call → FastAPI Gateway → Search Engine → pgvector/Postg
 | `GET` | `/health` | Health check |
 | `POST` | `/v1/memory/save` | Save a memory |
 | `POST` | `/v1/memory/recall` | 4-mode fused search |
-| `POST` | `/v1/memory/reflect` | LLM reflection over memories |
-| `POST` | `/v1/memory/synthesize` | Deep topic synthesis (via reflect) |
+| `POST` | `/v1/memory/reflect` | Deterministic reflection over memories |
+| `POST` | `/v1/memory/synthesize` | Deterministic topic synthesis (via reflect) |
 | `GET` | `/v1/agents/{id}/context` | Agent context pack |
 | `POST` | `/v1/agents/{id}/learn` | Teach an agent |
 | `GET` | `/v1/synapse/projects` | List Synapse-compat projects |
@@ -238,7 +249,7 @@ By default the installer writes three things per agent:
    etc.) that teach the agent *when* to use Nexus. Add `--no-rules` to
    install connection only.
 3. **Skills** (opt-in: `--with-skills`) — a reusable `nexus-memory` skill
-   the LLM can discover and invoke.
+   agents can discover and invoke.
 4. **Hooks** (opt-in: `--with-hooks`) — Claude Code event hooks
    (SessionStart, UserPromptSubmit, Stop) that auto-recall before each
    prompt and auto-save after each turn.
@@ -381,11 +392,11 @@ Services:
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `NEXUS_SECRET` | ✅ | — | API auth token (shared with clients) |
-| `OPENAI_API_KEY` | ✅ | — | For text-embedding-3-small |
-| `DEEPSEEK_API_KEY` | — | — | For LLM reflection (falls back to OpenAI) |
+| `OPENAI_API_KEY` | Optional | — | For hosted text-embedding-3-small embeddings |
+| `DEEPSEEK_API_KEY` | — | — | Optional legacy LLM-backed paths only |
 | `EMBEDDING_MODEL` | — | `text-embedding-3-small` | Embedding model to use |
 | `EMBEDDING_DIMS` | — | `384` | Vector dimension (text-embedding-3-small) |
-| `LLM_MODEL` | — | `deepseek-chat` | Model for reflection/synthesis |
+| `LLM_MODEL` | — | `deepseek-chat` | Legacy model for disabled mind paths |
 | `LEARNING_INTERVAL` | — | `300` | Consolidation interval (seconds) |
 | `CORS_ORIGINS` | — | `*` | CORS allowed origins |
 | `PORT` | — | `7777` | HTTP port |

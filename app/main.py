@@ -62,10 +62,11 @@ from app.routers.compat import router as compat_router
 from app.routers.graph import router as graph_router
 from app.routers.hooks import router as hooks_router
 from app.routers.adopted import router as adopted_router
-from app.routers.mind import router as mind_router
 from app.routers.layers import router as layers_router
 from app.routers.code import router as code_router
 from app.routers.federation import router as federation_router
+if settings.mind_enabled:
+    from app.routers.mind import router as mind_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -570,22 +571,22 @@ async def lifespan(app: FastAPI):
         _learning_loop(redis_client, settings.learning_interval)
     )
 
-    # Periodic Living Mind learning — prune old patterns every hour.
-    mind_learning_interval = int(getattr(settings, "mind_learning_interval_seconds", 3600))
-    mind_learning_task = asyncio.create_task(
-        _mind_periodic_learning_loop(mind_learning_interval)
-    )
-    log.info("Mind periodic learning started (every %ds)", mind_learning_interval)
+    mind_learning_task = None
+    reflection_task = None
+    if settings.mind_enabled:
+        mind_learning_interval = int(getattr(settings, "mind_learning_interval_seconds", 3600))
+        mind_learning_task = asyncio.create_task(
+            _mind_periodic_learning_loop(mind_learning_interval)
+        )
+        log.info("Mind periodic learning started (every %ds)", mind_learning_interval)
 
-    # Background self-reflection loop — one global mind thinks about
-    # recent memories unprompted and surfaces notable opinions proactively.
-    reflection_task = asyncio.create_task(
-        _mind_reflection_loop(settings.mind_reflection_interval_seconds)
-    )
-    log.info(
-        "Mind reflection loop started (every %ds, enabled=%s)",
-        settings.mind_reflection_interval_seconds, settings.mind_reflection_enabled,
-    )
+        reflection_task = asyncio.create_task(
+            _mind_reflection_loop(settings.mind_reflection_interval_seconds)
+        )
+        log.info(
+            "Mind reflection loop started (every %ds, enabled=%s)",
+            settings.mind_reflection_interval_seconds, settings.mind_reflection_enabled,
+        )
 
     # Start the scheduler for daily consolidation reports
     from app.scheduler import scheduler_loop
@@ -622,8 +623,10 @@ async def lifespan(app: FastAPI):
     yield
 
     task.cancel()
-    mind_learning_task.cancel()
-    reflection_task.cancel()
+    if mind_learning_task:
+        mind_learning_task.cancel()
+    if reflection_task:
+        reflection_task.cancel()
     scheduler_task.cancel()
     push_daemon.stop()
     push_task.cancel()
@@ -693,7 +696,8 @@ app.include_router(compat_router, prefix="/v1",        tags=["compat"],  depende
 app.include_router(graph_router,  prefix="/v1",        tags=["graph"],   dependencies=[Depends(_verify_key)])
 app.include_router(hooks_router,  prefix="/v1/hooks",  tags=["hooks"],   dependencies=[Depends(_verify_key)])
 app.include_router(adopted_router,                     tags=["adopted"], dependencies=[Depends(_verify_key)])
-app.include_router(mind_router,                        tags=["mind"],    dependencies=[Depends(_verify_key)])
+if settings.mind_enabled:
+    app.include_router(mind_router,                    tags=["mind"],    dependencies=[Depends(_verify_key)])
 app.include_router(layers_router,                      tags=["layers"], dependencies=[Depends(_verify_key)])
 app.include_router(code_router,                        tags=["code"],   dependencies=[Depends(_verify_key)])
 # Federation routes authenticate by HMAC signature, not the agent Bearer secret.
@@ -728,6 +732,10 @@ async def nexus_plugin_manifest():
 
 @app.get("/v1/mind/dashboard/panel", include_in_schema=False)
 async def mind_dashboard_panel(mind_id: str = "default"):
+    if not settings.mind_enabled:
+        return HTMLResponse(
+            content="<section class='mind-dashboard'><h2>Direct Agent Mode</h2><p>Living Mind is disabled. Agents should use REST or MCP tools directly.</p></section>"
+        )
     """A small HTML panel of one mind's state for the main dashboard.
 
     Returns a self-contained HTML fragment that the operator's

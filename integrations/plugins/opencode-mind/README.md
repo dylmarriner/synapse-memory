@@ -1,8 +1,7 @@
 # OpenCode + Living Mind
 
-Wires OpenCode to a running Nexus server's Living Mind.  The agent's
-system prompt is seeded with the mind's briefing at session start,
-and the mind surfaces relevant context before every prompt.
+Legacy integration for the optional Living Mind layer. Default Nexus
+deployments now use direct agent-to-memory interaction.
 
 ## Install
 

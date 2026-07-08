@@ -167,7 +167,7 @@ async def list_agents(db: AsyncSession = Depends(get_db)):
 
 @router.post("/agents/{agent_name}/represent")
 async def rebuild_representation(agent_name: str):
-    """Trigger an LLM representation rebuild for an agent."""
+    """Rebuild an agent representation from stored conclusions and memories."""
     from app.agents.peer import build_representation
     async with SessionLocal() as db:
         rep = await build_representation(db, agent_name)
