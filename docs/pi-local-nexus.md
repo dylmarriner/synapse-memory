@@ -69,6 +69,17 @@ RERANKER_ENABLED=false
 USE_ACTIVE_MEMORY=false
 ```
 
+## Prepare writable cache directories
+
+The Nexus container runs as the non-root `nexus` user with UID `1001`. Create the model/cache directories before starting compose and make them writable:
+
+```bash
+mkdir -p data/fastembed data/hf data/xet data/postgres data/redis
+sudo chown -R 1001:1001 data/fastembed data/hf data/xet
+```
+
+If the first embedding save fails with a permissions error, this is probably why. Linux has many hobbies; ruining a perfectly sensible container startup is one of them.
+
 ## Run with the Pi compose file
 
 ```bash
