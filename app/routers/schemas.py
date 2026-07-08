@@ -310,4 +310,3 @@ async def _ensure_agent(db, name: str):
             text("INSERT INTO agents (id, name, metadata) VALUES (gen_random_uuid(), :name, '{}'::jsonb)"),
             {"name": name},
         )
-        await db.commit()

@@ -95,6 +95,8 @@ async def extract_skills(
         except Exception as e:
             log.warning(f"Failed to save skill '{sk.get('name')}': {e}")
 
+    if saved:
+        await db.commit()
     return {"agent_id": agent_id, "extracted": len(saved), "skills": saved}
 
 
@@ -213,14 +215,14 @@ async def _upsert_skill(db: AsyncSession, agent_id: str, skill_data: dict) -> di
 
     await _ensure_agent(db, agent_id)
 
-    await db.execute(
+    row = await db.execute(
         text("""INSERT INTO skills
                 (id, agent_id, name, description, trigger, steps, content,
-                 tags, is_active, version, created_at, updated_at)
+                 tags, is_active, version, usage_count, created_at, updated_at)
                 VALUES (gen_random_uuid(),
                         (SELECT id FROM agents WHERE name = :agent),
                         :name, :desc, :trigger, :steps, :content,
-                        :tags, true, 1, :now, :now)
+                        :tags, true, 1, 0, :now, :now)
                 ON CONFLICT (agent_id, name) DO UPDATE SET
                     description = :desc2, trigger = :trigger2, steps = :steps2,
                     content = :content2, tags = :tags2, version = skills.version + 1,
@@ -235,23 +237,22 @@ async def _upsert_skill(db: AsyncSession, agent_id: str, skill_data: dict) -> di
             "content2": content, "tags2": json.dumps(tags), "now2": now,
         },
     )
-    await db.commit()
-
-    return {"name": name, "tags": tags, "version": 1}
+    inserted = row.fetchone()
+    version = inserted.version if inserted else 1
+    return {"name": name, "tags": tags, "version": version}
 
 
 async def _basic_extract(db, agent_id: str, conversation: str):
     """Fallback: basic pattern detection without LLM."""
     # Simple heuristic: look for repeated tool patterns
     lines = conversation.strip().split("\n")
-    if len(lines) < 5:
-        return {"agent_id": agent_id, "extracted": 0, "skills": []}
+    text_lower = conversation.lower()
 
     # Detect common patterns
     skills_to_check = []
 
     # Check for git/commit patterns
-    if any("git add" in l.lower() for l in lines):
+    if any(kw in text_lower for kw in ("git add", "git commit", "git push", "git status")):
         skills_to_check.append({
             "name": "git-commit-workflow",
             "description": "Standard git add, commit, push workflow",
@@ -262,7 +263,7 @@ async def _basic_extract(db, agent_id: str, conversation: str):
         })
 
     # Check for docker patterns
-    if any("docker" in l.lower() for l in lines):
+    if "docker" in text_lower:
         skills_to_check.append({
             "name": "docker-workflow",
             "description": "Docker container and image management",
@@ -280,6 +281,8 @@ async def _basic_extract(db, agent_id: str, conversation: str):
         except Exception as e:
             log.warning(f"Basic extract failed for '{sk['name']}': {e}")
 
+    if saved:
+        await db.commit()
     return {"agent_id": agent_id, "extracted": len(saved), "skills": saved, "mode": "basic"}
 
 
@@ -317,4 +320,3 @@ async def _ensure_agent(db, name: str):
             text("INSERT INTO agents (id, name, metadata) VALUES (gen_random_uuid(), :name, '{}'::jsonb)"),
             {"name": name},
         )
-        await db.commit()
