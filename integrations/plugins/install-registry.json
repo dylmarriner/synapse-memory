@@ -4,7 +4,7 @@
   "name": "Nexus Memory",
   "version": "1.0.0",
   "description": "Unified long-term memory for AI agents. 4-way recall (vector + lexical + graph + temporal), lessons, entity graph, rolling summaries. Shared across all agents and devices via Tailscale.",
-  "homepage": "https://github.com/dylanmarriner/shared-memory-mcp",
+  "homepage": "https://github.com/dylmarriner/synapse-memory",
   "license": "MIT",
   "endpoints": {
     "dashboard": "http://100.93.75.87:7777/",
@@ -19,10 +19,10 @@
     "env": "NEXUS_SECRET"
   },
   "install": {
-    "one_liner": "curl -fsSL https://raw.githubusercontent.com/dylanmarriner/shared-memory-mcp/main/scripts/nexus-install-remote.sh | bash",
+    "one_liner": "curl -fsSL https://raw.githubusercontent.com/dylmarriner/synapse-memory/main/scripts/nexus-install-remote.sh | bash",
     "local": "scripts/nexus-install",
     "from_repo": {
-      "git": "https://github.com/dylanmarriner/shared-memory-mcp.git",
+      "git": "https://github.com/dylmarriner/synapse-memory.git",
       "path": "scripts/nexus-install"
     },
     "npm": "@nexus/memory",
@@ -134,7 +134,7 @@
       "command": "curl -X POST http://127.0.0.1:3100/api/plugins/install -H 'Content-Type: application/json' -d '{\"packageName\":\"/path/to/synapse-memory/paperclip-plugin\",\"isLocalPath\":true}'",
       "fallback_config": "~/.config/paperclip/nexus-memory.json",
       "package_path": "paperclip-plugin/",
-      "docs": "https://github.com/dylanmarriner/shared-memory-mcp/tree/main/paperclip-plugin"
+      "docs": "https://github.com/dylmarriner/synapse-memory/tree/main/paperclip-plugin"
     },
     "openclaw": {
       "label": "OpenClaw",
@@ -143,7 +143,7 @@
       "command": "curl -X POST http://127.0.0.1:<port>/api/plugins/install -H 'Content-Type: application/json' -d '{\"packageName\":\"/path/to/synapse-memory/openclaw-integration/extensions/nexus-memory\",\"isLocalPath\":true}'",
       "fallback_config": "~/.openclaw/openclaw.json + ~/.openclaw/nexus.env",
       "package_path": "openclaw-integration/extensions/nexus-memory/",
-      "docs": "https://github.com/dylanmarriner/shared-memory-mcp/tree/main/openclaw-integration"
+      "docs": "https://github.com/dylmarriner/synapse-memory/tree/main/openclaw-integration"
     },
     "opencode": {
       "label": "OpenCode",

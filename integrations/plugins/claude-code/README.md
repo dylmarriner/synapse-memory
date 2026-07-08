@@ -32,4 +32,4 @@ export NEXUS_SECRET="<your-bearer-secret>"
 - `agent_context` — load agent-specific context
 - `nexus_status` — check server health
 
-See `https://github.com/dylanmarriner/shared-memory-mcp` for the full tool list and REST examples.
+See `https://github.com/dylmarriner/synapse-memory` for the full tool list and REST examples.

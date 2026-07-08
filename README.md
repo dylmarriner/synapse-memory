@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/dylanmarriner/synapse-memory/main/docs/nexus-banner-dark.svg">
-    <img alt="Nexus" src="https://raw.githubusercontent.com/dylanmarriner/synapse-memory/main/docs/nexus-banner-light.svg" width="520">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/dylmarriner/synapse-memory/main/docs/nexus-banner-dark.svg">
+    <img alt="Nexus" src="https://raw.githubusercontent.com/dylmarriner/synapse-memory/main/docs/nexus-banner-light.svg" width="520">
   </picture>
 </p>
 
@@ -11,9 +11,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/dylanmarriner/synapse-memory/actions"><img src="https://img.shields.io/github/actions/workflow/status/dylanmarriner/synapse-memory/ci.yml?branch=main&style=flat&logo=github&label=CI&color=22d3ee" alt="CI"></a>
+  <a href="https://github.com/dylmarriner/synapse-memory/actions"><img src="https://img.shields.io/github/actions/workflow/status/dylmarriner/synapse-memory/ci.yml?branch=main&style=flat&logo=github&label=CI&color=22d3ee" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-34d399?style=flat" alt="License"></a>
-  <a href="https://github.com/dylanmarriner/synapse-memory/releases"><img src="https://img.shields.io/github/v/release/dylanmarriner/synapse-memory?style=flat&logo=semver&color=a78bfa" alt="Version"></a>
+  <a href="https://github.com/dylmarriner/synapse-memory/releases"><img src="https://img.shields.io/github/v/release/dylmarriner/synapse-memory?style=flat&logo=semver&color=a78bfa" alt="Version"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11+-fbbf24?style=flat&logo=python" alt="Python"></a>
   <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-0.115+-059669?style=flat&logo=fastapi" alt="FastAPI"></a>
   <a href="https://www.postgresql.org/"><img src="https://img.shields.io/badge/PostgreSQL-17+-336791?style=flat&logo=postgresql" alt="PostgreSQL"></a>
@@ -21,8 +21,8 @@
   <br>
   <a href="https://tailscale.com/"><img src="https://img.shields.io/badge/Tailscale-ready-06b6d4?style=flat&logo=tailscale" alt="Tailscale"></a>
   <a href="https://modelcontextprotocol.io/"><img src="https://img.shields.io/badge/MCP-2024--11--05-6366f1?style=flat" alt="MCP"></a>
-  <a href="https://github.com/dylanmarriner/synapse-memory/stargazers"><img src="https://img.shields.io/github/stars/dylanmarriner/synapse-memory?style=flat&logo=github&color=fb923c" alt="Stars"></a>
-  <a href="https://github.com/dylanmarriner/synapse-memory/pulls"><img src="https://img.shields.io/badge/PRs-welcome-4ade80?style=flat" alt="PRs Welcome"></a>
+  <a href="https://github.com/dylmarriner/synapse-memory/stargazers"><img src="https://img.shields.io/github/stars/dylmarriner/synapse-memory?style=flat&logo=github&color=fb923c" alt="Stars"></a>
+  <a href="https://github.com/dylmarriner/synapse-memory/pulls"><img src="https://img.shields.io/badge/PRs-welcome-4ade80?style=flat" alt="PRs Welcome"></a>
   <img src="https://img.shields.io/badge/status-production-34d399?style=flat" alt="Production Ready">
 </p>
 
@@ -114,7 +114,7 @@ Powered by **PostgreSQL + pgvector + Redis**, Nexus provides **four parallel sea
 
 ```bash
 # Clone
-git clone https://github.com/dylanmarriner/synapse-memory
+git clone https://github.com/dylmarriner/synapse-memory
 cd synapse-memory
 
 # Configure
@@ -227,7 +227,7 @@ config-file fallbacks for agents that don't have a plugin install command.
 scripts/nexus-install
 
 # Or via one-liner (no clone required):
-curl -fsSL https://raw.githubusercontent.com/dylanmarriner/shared-memory-mcp/main/scripts/nexus-install-remote.sh \
+curl -fsSL https://raw.githubusercontent.com/dylmarriner/synapse-memory/main/scripts/nexus-install-remote.sh \
   | NEXUS_URL=http://<host>:7777 NEXUS_SECRET=<secret> bash
 
 # Show what's supported + detection status:
@@ -414,7 +414,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 7777
 
 ```bash
 # Setup
-git clone https://github.com/dylanmarriner/synapse-memory
+git clone https://github.com/dylmarriner/synapse-memory
 cd synapse-memory
 uv venv && source .venv/bin/activate
 uv pip install -r requirements.txt
@@ -430,20 +430,13 @@ mypy app/
 ### Project Structure
 
 ```
-nexus/
-├── app/
-│   ├── main.py              # FastAPI application
-│   ├── mcp.py               # MCP protocol server (42+ tools)
-│   ├── worker.py             # Async background worker
-│   ├── models/               # SQLAlchemy ORM models
-│   ├── routers/              # FastAPI route handlers
-│   ├── search/               # Search engine (vector/lexical/graph/temporal)
-│   ├── memory/               # Memory operations (ingest, reflect, consolidate)
-│   └── agents/               # Agent registry & context
-├── integrations/             # Client configs, MCP, plugins
+├── app/                      # API, worker, search, memory, and agent runtime
+├── docs/                     # Architecture and integration guides
+├── integrations/             # MCP configs, plugins, skills, and manifests
 ├── migrations/               # Database migrations
-├── scripts/                  # Deployment & utility scripts
-├── sdk/                      # Python & TypeScript SDKs
+├── scripts/                  # Deployment, bootstrap, and maintenance scripts
+├── sdk/                      # Python and TypeScript SDKs
+├── tests/                    # Integration and subsystem tests
 └── docker-compose.yml        # Production deployment
 ```
 

@@ -24,7 +24,7 @@ agent's native install path with a config-file fallback.
 scripts/nexus-install
 
 # One-liner (no clone required)
-curl -fsSL https://raw.githubusercontent.com/dylanmarriner/shared-memory-mcp/main/scripts/nexus-install-remote.sh \
+curl -fsSL https://raw.githubusercontent.com/dylmarriner/synapse-memory/main/scripts/nexus-install-remote.sh \
   | NEXUS_URL=http://<host>:7777 NEXUS_SECRET=<secret> bash
 
 # Show what's supported + detection status
