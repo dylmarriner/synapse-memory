@@ -21,9 +21,24 @@ class Settings(BaseSettings):
     anthropic_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
     deepseek_base_url: str = "https://api.deepseek.com/v1"
+
+    # Embeddings are used by vector recall and semantic deduplication.
+    # Providers:
+    # - auto: remote HTTP if configured, then OpenAI-compatible API, then local FastEmbed
+    # - http: remote HTTP embedding service only, e.g. a Raspberry Pi at http://pi:8787/embed
+    # - openai: OpenAI-compatible /v1/embeddings only
+    # - local: in-process FastEmbed only
+    # - disabled/none/off: skip vector embeddings and rely on lexical/graph/temporal recall
+    embedding_provider: str = "auto"
     embedding_model: str = "text-embedding-3-small"
-    llm_model: str = "deepseek-chat"
     embedding_dims: int = 384
+    embedding_base_url: Optional[str] = None
+    embedding_api_key: Optional[str] = None
+    embedding_timeout_seconds: float = 10.0
+    local_embedding_model: str = "BAAI/bge-small-en-v1.5"
+    local_embedding_cache_dir: str = "/tmp/fe_cache"
+
+    llm_model: str = "deepseek-chat"
     llm_enabled: bool = False
 
     # Living Mind reasoning models.  The mind reasons with a local Ollama model
@@ -55,7 +70,7 @@ class Settings(BaseSettings):
     mind_reflection_lookback_memories: int = 50
     mind_reflection_max_topics_per_cycle: int = 5
     mind_reflection_push_stance_delta: float = 0.3   # push if strength moves at least this much
-    mind_reflection_push_min_strength: float = 0.75  # or push if a strong new opinion crosses this bar
+    mind_reflection_push_min_strength: float = 0.75  # or push if a strong new opinion crosses that bar
     mind_learning_interval_seconds: int = 3600
 
     # Token/cost controls. Defaults favor concise LLM calls while preserving quality.
