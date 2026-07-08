@@ -100,6 +100,9 @@ services:
     build: .
     volumes:
       - .:/app:ro
+      - ./data/fastembed:/tmp/fe_cache
+      - ./data/hf:/tmp/hf_home
+      - ./data/xet:/tmp/xet_cache
     ports:
       - "0.0.0.0:${NEXUS_PORT:-7777}:7777"
     environment:
@@ -110,8 +113,14 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-auto}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
       EMBEDDING_DIMS: ${EMBEDDING_DIMS:-384}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_TIMEOUT_SECONDS: ${EMBEDDING_TIMEOUT_SECONDS:-10}
+      LOCAL_EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      LOCAL_EMBEDDING_CACHE_DIR: ${LOCAL_EMBEDDING_CACHE_DIR:-/tmp/fe_cache}
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
@@ -151,6 +160,9 @@ services:
     build: .
     volumes:
       - .:/app:ro
+      - ./data/fastembed:/tmp/fe_cache
+      - ./data/hf:/tmp/hf_home
+      - ./data/xet:/tmp/xet_cache
     environment:
       NEXUS_SECRET: ${NEXUS_SECRET}
       DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
@@ -166,8 +178,14 @@ services:
       MIND_REFLECTION_ENABLED: ${MIND_REFLECTION_ENABLED:-true}
       MIND_REFLECTION_MIND_ID: ${MIND_REFLECTION_MIND_ID:-nexus}
       MIND_REFLECTION_INTERVAL_SECONDS: ${MIND_REFLECTION_INTERVAL_SECONDS:-1800}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-auto}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
       EMBEDDING_DIMS: ${EMBEDDING_DIMS:-384}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_TIMEOUT_SECONDS: ${EMBEDDING_TIMEOUT_SECONDS:-10}
+      LOCAL_EMBEDDING_MODEL: ${LOCAL_EMBEDDING_MODEL:-BAAI/bge-small-en-v1.5}
+      LOCAL_EMBEDDING_CACHE_DIR: ${LOCAL_EMBEDDING_CACHE_DIR:-/tmp/fe_cache}
       LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
       LLM_COST_SAVER: ${LLM_COST_SAVER:-true}
       LLM_INPUT_CHAR_LIMIT: ${LLM_INPUT_CHAR_LIMIT:-1200}
