@@ -295,7 +295,7 @@ def connect_target(target: dict[str, Any], url: str, secret: str, apply: bool) -
                 "nexusSecret": secret,
                 "agentIdPrefix": "paperclip",
                 "defaultLimit": 8,
-                "rtkWrapper": str(ROOT / "scripts" / "nexus-rtk"),
+                "obeliskWrapper": "obelisk",
             }
             action = write_json(path, config, apply)
             return Finding(target["id"], path, status, "wrote Paperclip Nexus config", action)
@@ -363,8 +363,7 @@ def connect_target(target: dict[str, Any], url: str, secret: str, apply: bool) -
                 f"NEXUS_URL={url.rstrip('/')}\n"
                 f"NEXUS_SECRET={secret}\n"
                 f"NEXUS_AGENT_ID={target['agent']}\n"
-                f"RTK_TELEMETRY_DISABLED=1\n"
-                f"NEXUS_RTK_WRAPPER={ROOT / 'scripts' / 'nexus-rtk'}\n"
+                f"NEXUS_OBELISK_WRAPPER=obelisk\n"
             )
             if apply:
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -376,7 +375,7 @@ def connect_target(target: dict[str, Any], url: str, secret: str, apply: bool) -
             return Finding(target["id"], path, status, "wrote env bootstrap", action)
 
         if kind == "instructions":
-            instruction = f"""# Nexus + RTK Agent Instructions
+            instruction = f"""# Nexus + Obelisk Agent Instructions
 
 Nexus is available for durable memory.
 
@@ -385,15 +384,14 @@ Nexus is available for durable memory.
 - Agent ID: {target['agent']}
 
 Use Nexus memory tools for durable preferences, lessons, fixes, decisions, and handoffs.
-Use `{ROOT / 'scripts' / 'nexus-rtk'} <command>` for noisy shell commands when possible;
-fall back to `rtk <command>` if the wrapper is unavailable.
+Use `obelisk <command>` for noisy shell commands when possible.
 Do not store raw command noise as memory; save durable summaries/lessons only.
 """
             if apply:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 b = backup(path)
                 existing = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
-                if "# Nexus + RTK Agent Instructions" not in existing:
+                if "# Nexus + Obelisk Agent Instructions" not in existing:
                     path.write_text((existing.rstrip() + "\n\n" + instruction).lstrip(), encoding="utf-8")
                 action = "written" + (f"; backup={b}" if b else "")
             else:
@@ -440,10 +438,10 @@ def main() -> int:
 
     ok, detail = health_check(args.nexus_url)
     report["checks"]["nexus_health"] = {"ok": ok, "detail": detail}
-    ok, detail = command_ok(["rtk", "gain"])
-    report["checks"]["rtk"] = {"ok": ok, "detail": detail}
-    ok, detail = command_ok([sys.executable, str(ROOT / "scripts" / "nexus-rtk"), "git", "status", "--short"])
-    report["checks"]["nexus_rtk_wrapper"] = {"ok": ok, "detail": detail}
+    ok, detail = command_ok(["obelisk", "doctor"])
+    report["checks"]["obelisk"] = {"ok": ok, "detail": detail}
+    ok, detail = command_ok(["obelisk", "run", "git", "status", "--short"])
+    report["checks"]["nexus_obelisk_wrapper"] = {"ok": ok, "detail": detail}
 
     if args.apply and not args.secret:
         print("ERROR: --apply requires NEXUS_SECRET via --secret, env, or .env", file=sys.stderr)

@@ -16,7 +16,16 @@
       "Bash(scp /tmp/claude-1000/-mnt-development1-synapse-memory/9d636532-f841-47b1-9e77-77218877fa7c/scratchpad/watch_reflection.sh kubuntux:/tmp/watch_reflection.sh)",
       "Bash(grep -v \"settings\\\\.\\\\|_key\\\\b.*:.*str\\\\|API_KEY:\\\\s*\\\\\\\\\\\\${\")",
       "Bash(git check-ignore *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(cd *)",
+      "Bash(gh auth *)",
+      "Bash(gh repo *)",
+      "Bash(git remote *)",
+      "Bash(git fetch *)",
+      "Bash(gh api *)",
+      "Bash(python3 -c 'import ast,glob,sys *)",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s -m 8 -w \"\\\\nHTTP_STATUS:%{http_code}\\\\n\" \"http://100.93.75.87:7777/health\")"
     ]
   }
 }

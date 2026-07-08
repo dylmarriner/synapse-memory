@@ -7,8 +7,8 @@ Integration classes:
 
 - **MCP HTTP** — add Nexus `/mcp` URL and bearer header.
 - **MCP stdio** — add `scripts/adapters/nexus_mcp_stdio.py` command.
-- **Instructions** — write project/global instructions pointing to Nexus + RTK.
-- **Env bootstrap** — write `NEXUS_URL`, `NEXUS_SECRET`, `NEXUS_AGENT_ID`, RTK vars.
+- **Instructions** — write project/global instructions pointing to Nexus + Obelisk.
+- **Env bootstrap** — write `NEXUS_URL`, `NEXUS_SECRET`, `NEXUS_AGENT_ID`, and Obelisk-related env vars where supported.
 - **Plugin** — install/copy a Nexus plugin or manifest.
 - **REST/OpenAPI** — register Nexus REST/OpenAPI/plugin manifest.
 - **Unknown/manual** — known product, integration format needs confirmation.
@@ -18,7 +18,7 @@ Integration classes:
 | Target | Category | Integration | Current path/pattern |
 |---|---|---|---|
 | Claude Desktop | desktop agent | MCP stdio | `~/.config/Claude/claude_desktop_config.json` |
-| Claude Code | CLI agent | instructions / RTK hook | `~/.claude/CLAUDE.md`, `rtk init -g` |
+| Claude Code | CLI agent | instructions / Obelisk hook | `~/.claude/CLAUDE.md`, Obelisk install path |
 | Cline standalone | VS Code-like extension | MCP stdio | `~/.cline/data/settings/cline_mcp_settings.json` |
 | Cline in Windsurf | IDE extension | MCP HTTP | `~/.config/Windsurf/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` |
 | Cline in Antigravity | IDE extension | MCP HTTP | `~/.config/Antigravity/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` |
@@ -55,10 +55,10 @@ Integration classes:
 | Continue in JetBrains | IDE plugin | config/instructions | JetBrains plugin config path needs confirmation. |
 | Zed Assistant | IDE | context server / settings / instructions | Zed has `.zed/`, `.agents/`, `AGENTS.md`; investigate exact MCP/context-server settings. |
 | JetBrains AI Assistant | IDE | unknown/manual | May support MCP indirectly or only plugin-specific settings. Needs confirmation. |
-| GitHub Copilot Chat / Agent | IDE extension | instructions only | No general MCP config. Add workspace instructions (`.github/copilot-instructions.md`) and RTK/Nexus guidance. |
+| GitHub Copilot Chat / Agent | IDE extension | instructions only | No general MCP config. Add workspace instructions (`.github/copilot-instructions.md`) and Obelisk/Nexus guidance. |
 | Sourcegraph Cody | IDE extension | instructions/context | Cody repo URL changed; investigate extension config and custom context support. |
 | Tabby | self-hosted assistant | IDE/server config | Strong self-hosted assistant. More completion/chat than agent tools; add instructions/context if possible. |
-| AutoCodeRover | autonomous SWE agent | env/instructions | Add Nexus env and RTK wrapper. |
+| AutoCodeRover | autonomous SWE agent | env/instructions | Add Nexus env and Obelisk wrapper. |
 | smol-ai/developer | autonomous codegen | env/instructions | Add Nexus memory instructions. |
 | MetaGPT | multi-agent framework | env/tool module | Add Nexus REST tool/provider. |
 | CrewAI | agent framework | tool module | Add Nexus REST tool. |
@@ -106,7 +106,7 @@ Extension globalStorage IDs to search:
 
 ## Project instruction files to manage
 
-These should receive Nexus + RTK guidance where appropriate:
+These should receive Nexus + Obelisk guidance where appropriate:
 
 - `AGENTS.md`
 - `CLAUDE.md`

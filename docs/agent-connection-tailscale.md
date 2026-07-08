@@ -194,10 +194,8 @@ Nexus is available for durable memory.
 - Agent ID: <agent>:<device>:<workspace>
 
 Use Nexus for durable preferences, lessons, fixes, decisions, and handoffs.
-Use `/path/to/synapse-memory/scripts/nexus-rtk <command>` for noisy shell
-commands when possible; fall back to `rtk <command>` if the wrapper is
-unavailable. Do not store raw command noise as memory; save durable summaries
-and lessons only.
+Use `obelisk <command>` for noisy shell commands when possible. Do not store
+raw command noise as memory; save durable summaries and lessons only.
 ```
 
 ## Agent-by-agent connection matrix
@@ -205,7 +203,7 @@ and lessons only.
 | Agent / IDE | Best method | Notes |
 |---|---|---|
 | Claude Desktop | stdio MCP | Use the local bridge in `scripts/adapters/nexus_mcp_stdio.py`. |
-| Claude Code | instructions + RTK hook | Add Nexus instructions; optionally run `RTK_INIT_CLAUDE=1 bash scripts/setup-rtk.sh`. |
+| Claude Code | instructions + Obelisk optimization | Add Nexus instructions and use Obelisk for noisy shell commands. |
 | Cline | HTTP MCP or stdio MCP | VS Code-like installs often accept HTTP MCP; standalone Cline can use stdio. |
 | Roo Code / Kilo Code / Kade | HTTP MCP | Usually use VS Code-compatible MCP settings. |
 | Windsurf / Antigravity / Trae | HTTP MCP | Nexus Doctor scans their global storage and global MCP config paths. |
@@ -269,7 +267,7 @@ curl -s -X POST "$NEXUS_URL/v1/memory/recall" \
 | MCP works locally but not remotely | Use the Tailscale IP/MagicDNS name, not `localhost`, in remote configs. |
 | Stdio MCP command fails | Ensure the bridge file exists on the agent computer and Python can run it. |
 | Agent saves are hard to identify | Set `NEXUS_AGENT_ID`, `NEXUS_DEVICE`, and `NEXUS_SOURCE` per agent. |
-| Too much shell output enters context | Use `scripts/nexus-rtk <command>` or `rtk <command>` for noisy shell commands. |
+| Too much shell output enters context | Use `obelisk <command>` for noisy shell commands. |
 
 ## Security notes
 

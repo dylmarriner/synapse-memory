@@ -101,11 +101,11 @@ export interface MetricsResponse {
   last_24h: Record<string, number>;
   memory_types: Record<string, number>;
   top_agents: { agent_id: string; memories: number; session_count: number; last_active: string | null; last_memory_at: string | null }[];
-  rtk: { total_events: number; failed_24h: number; tokens_saved_estimate: number; durable_memories: number };
+  obelisk: { total_events: number; failed_24h: number; tokens_saved_estimate: number; durable_memories: number };
   recent_events: { id: string; actor: string; action: string; created_at: string | null; detail: unknown }[];
 }
 
-export interface RtkSummary {
+export interface ObeliskSummary {
   total_events: number;
   failures: number;
   tokens_saved_estimate: number;

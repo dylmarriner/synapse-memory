@@ -51,7 +51,7 @@ async def trigger_organize(db: AsyncSession = Depends(get_db)):
 
 @router.get("/admin/metrics")
 async def admin_metrics(request: Request, db: AsyncSession = Depends(get_db)):
-    """Dashboard-ready operational metrics across memory, agents, sessions, and RTK."""
+    """Dashboard-ready operational metrics across memory, agents, sessions, and Obelisk."""
     components = {"postgres": False, "redis": False}
     try:
         await db.execute(text("SELECT 1"))
@@ -88,7 +88,7 @@ async def admin_metrics(request: Request, db: AsyncSession = Depends(get_db)):
         "sessions": int(await scalar("SELECT COUNT(*) FROM sessions WHERE started_at > NOW() - INTERVAL '24 hours'")),
         "messages": int(await scalar("SELECT COUNT(*) FROM messages WHERE created_at > NOW() - INTERVAL '24 hours'")),
         "events": int(await scalar("SELECT COUNT(*) FROM events WHERE created_at > NOW() - INTERVAL '24 hours'")),
-        "rtk_events": int(await scalar("SELECT COUNT(*) FROM events WHERE action = 'rtk.command' AND created_at > NOW() - INTERVAL '24 hours'")),
+        "obelisk_events": int(await scalar("SELECT COUNT(*) FROM events WHERE action = 'obelisk.command' AND created_at > NOW() - INTERVAL '24 hours'")),
     }
 
     memory_type_rows = await db.execute(text("""
@@ -116,19 +116,19 @@ async def admin_metrics(request: Request, db: AsyncSession = Depends(get_db)):
         "last_memory_at": r.last_memory_at.isoformat() if r.last_memory_at else None,
     } for r in top_agent_rows.fetchall()]
 
-    rtk = {
-        "total_events": int(await scalar("SELECT COUNT(*) FROM events WHERE action = 'rtk.command'")),
+    obelisk = {
+        "total_events": int(await scalar("SELECT COUNT(*) FROM events WHERE action = 'obelisk.command'")),
         "failed_24h": int(await scalar("""
             SELECT COUNT(*) FROM events
-            WHERE action = 'rtk.command'
+            WHERE action = 'obelisk.command'
               AND created_at > NOW() - INTERVAL '24 hours'
               AND COALESCE((detail::jsonb->>'exit_code')::int, 0) != 0
         """)),
         "tokens_saved_estimate": int(await scalar("""
             SELECT COALESCE(SUM(COALESCE((detail::jsonb->>'tokens_saved_estimate')::int, 0)), 0)
-            FROM events WHERE action = 'rtk.command'
+            FROM events WHERE action = 'obelisk.command'
         """)),
-        "durable_memories": int(await scalar("SELECT COUNT(*) FROM memories WHERE metadata->>'source' = 'rtk'")),
+        "durable_memories": int(await scalar("SELECT COUNT(*) FROM memories WHERE metadata->>'source' = 'obelisk'")),
     }
 
     recent_rows = await db.execute(text("""
@@ -158,45 +158,45 @@ async def admin_metrics(request: Request, db: AsyncSession = Depends(get_db)):
         "last_24h": last_24h,
         "memory_types": memory_types,
         "top_agents": top_agents,
-        "rtk": rtk,
+        "obelisk": obelisk,
         "recent_events": recent_events,
     }
 
 
-@router.get("/admin/rtk")
-async def rtk_metrics(db: AsyncSession = Depends(get_db)):
-    """Return RTK command telemetry for dashboards and operations views."""
+@router.get("/admin/obelisk")
+async def obelisk_metrics(db: AsyncSession = Depends(get_db)):
+    """Return Obelisk command telemetry for dashboards and operations views."""
     try:
         total = (await db.execute(text("""
-            SELECT COUNT(*) FROM events WHERE action = 'rtk.command'
+            SELECT COUNT(*) FROM events WHERE action = 'obelisk.command'
         """))).scalar() or 0
 
         recent_24h = (await db.execute(text("""
             SELECT COUNT(*) FROM events
-            WHERE action = 'rtk.command' AND created_at > NOW() - INTERVAL '24 hours'
+            WHERE action = 'obelisk.command' AND created_at > NOW() - INTERVAL '24 hours'
         """))).scalar() or 0
 
         failed_24h = (await db.execute(text("""
             SELECT COUNT(*) FROM events
-            WHERE action = 'rtk.command'
+            WHERE action = 'obelisk.command'
               AND created_at > NOW() - INTERVAL '24 hours'
               AND COALESCE((detail::jsonb->>'exit_code')::int, 0) != 0
         """))).scalar() or 0
 
         saved_tokens = (await db.execute(text("""
             SELECT COALESCE(SUM(COALESCE((detail::jsonb->>'tokens_saved_estimate')::int, 0)), 0)
-            FROM events WHERE action = 'rtk.command'
+            FROM events WHERE action = 'obelisk.command'
         """))).scalar() or 0
 
         durable_memories = (await db.execute(text("""
             SELECT COUNT(*) FROM memories
-            WHERE metadata->>'source' = 'rtk'
+            WHERE metadata->>'source' = 'obelisk'
         """))).scalar() or 0
 
         by_agent_rows = await db.execute(text("""
             SELECT actor AS agent_id, COUNT(*) AS count
             FROM events
-            WHERE action = 'rtk.command'
+            WHERE action = 'obelisk.command'
             GROUP BY actor
             ORDER BY count DESC
             LIMIT 10
@@ -205,7 +205,7 @@ async def rtk_metrics(db: AsyncSession = Depends(get_db)):
         command_rows = await db.execute(text("""
             SELECT detail::jsonb->>'command_label' AS command_label, COUNT(*) AS count
             FROM events
-            WHERE action = 'rtk.command'
+            WHERE action = 'obelisk.command'
             GROUP BY command_label
             ORDER BY count DESC
             LIMIT 10
@@ -214,7 +214,7 @@ async def rtk_metrics(db: AsyncSession = Depends(get_db)):
         recent_rows = await db.execute(text("""
             SELECT id, actor, created_at, detail
             FROM events
-            WHERE action = 'rtk.command'
+            WHERE action = 'obelisk.command'
             ORDER BY created_at DESC
             LIMIT 20
         """))
@@ -260,9 +260,9 @@ async def rtk_metrics(db: AsyncSession = Depends(get_db)):
         }
 
 
-@router.get("/admin/rtk/summary")
-async def rtk_summary(db: AsyncSession = Depends(get_db)):
-    """Richer RTK command telemetry for dashboard cards and troubleshooting."""
+@router.get("/admin/obelisk/summary")
+async def obelisk_summary(db: AsyncSession = Depends(get_db)):
+    """Richer Obelisk command telemetry for dashboard cards and troubleshooting."""
     summary_row = (await db.execute(text("""
         SELECT COUNT(*) AS total,
                COUNT(*) FILTER (WHERE COALESCE((detail::jsonb->>'exit_code')::int, 0) != 0) AS failures,
@@ -270,7 +270,7 @@ async def rtk_summary(db: AsyncSession = Depends(get_db)):
                COALESCE(AVG(COALESCE((detail::jsonb->>'duration_ms')::int, 0)), 0) AS avg_duration_ms,
                COALESCE(MAX(COALESCE((detail::jsonb->>'duration_ms')::int, 0)), 0) AS max_duration_ms
         FROM events
-        WHERE action = 'rtk.command'
+        WHERE action = 'obelisk.command'
     """))).fetchone()
 
     by_agent_rows = await db.execute(text("""
@@ -279,7 +279,7 @@ async def rtk_summary(db: AsyncSession = Depends(get_db)):
                COALESCE(SUM(COALESCE((detail::jsonb->>'tokens_saved_estimate')::int, 0)), 0) AS tokens_saved,
                COUNT(*) FILTER (WHERE COALESCE((detail::jsonb->>'exit_code')::int, 0) != 0) AS failures
         FROM events
-        WHERE action = 'rtk.command'
+        WHERE action = 'obelisk.command'
         GROUP BY actor
         ORDER BY tokens_saved DESC, count DESC
         LIMIT 20
@@ -289,7 +289,7 @@ async def rtk_summary(db: AsyncSession = Depends(get_db)):
         SELECT COALESCE(detail::jsonb->>'command_label', 'unknown') AS command_label,
                COUNT(*) AS failures
         FROM events
-        WHERE action = 'rtk.command'
+        WHERE action = 'obelisk.command'
           AND COALESCE((detail::jsonb->>'exit_code')::int, 0) != 0
         GROUP BY command_label
         ORDER BY failures DESC
@@ -302,7 +302,7 @@ async def rtk_summary(db: AsyncSession = Depends(get_db)):
                COALESCE(AVG(COALESCE((detail::jsonb->>'duration_ms')::int, 0)), 0) AS avg_duration_ms,
                COALESCE(MAX(COALESCE((detail::jsonb->>'duration_ms')::int, 0)), 0) AS max_duration_ms
         FROM events
-        WHERE action = 'rtk.command'
+        WHERE action = 'obelisk.command'
         GROUP BY command_label
         ORDER BY avg_duration_ms DESC
         LIMIT 20
@@ -333,9 +333,9 @@ async def rtk_summary(db: AsyncSession = Depends(get_db)):
     }
 
 
-@router.get("/admin/rtk/timeseries")
-async def rtk_timeseries(days: int = 14, db: AsyncSession = Depends(get_db)):
-    """Daily RTK savings/failure telemetry for charts."""
+@router.get("/admin/obelisk/timeseries")
+async def obelisk_timeseries(days: int = 14, db: AsyncSession = Depends(get_db)):
+    """Daily Obelisk savings/failure telemetry for charts."""
     days = max(1, min(days, 90))
     rows = await db.execute(text("""
         SELECT date_trunc('day', created_at) AS day,
@@ -344,7 +344,7 @@ async def rtk_timeseries(days: int = 14, db: AsyncSession = Depends(get_db)):
                COALESCE(SUM(COALESCE((detail::jsonb->>'tokens_saved_estimate')::int, 0)), 0) AS tokens_saved,
                COALESCE(AVG(COALESCE((detail::jsonb->>'duration_ms')::int, 0)), 0) AS avg_duration_ms
         FROM events
-        WHERE action = 'rtk.command'
+        WHERE action = 'obelisk.command'
           AND created_at >= NOW() - (:days * INTERVAL '1 day')
         GROUP BY day
         ORDER BY day ASC

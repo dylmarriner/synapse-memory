@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchMetrics, fetchStats, fetchMemoryQuality, fetchRtkSummary } from '../api/nexus';
-import type { MetricsResponse, StatsResponse, MemoryQualityResponse, RtkSummary } from '../types/nexus';
+import { fetchMetrics, fetchStats, fetchMemoryQuality, fetchObeliskSummary } from '../api/nexus';
+import type { MetricsResponse, StatsResponse, MemoryQualityResponse, ObeliskSummary } from '../types/nexus';
 
-const RADAR_BANDS = ['memories', 'agents', 'entities', 'sessions', 'rtk', 'mind', 'reflect', 'proactive'];
+const RADAR_BANDS = ['memories', 'agents', 'entities', 'sessions', 'obelisk', 'mind', 'reflect', 'proactive'];
 
 function Stat({ label, value, color = 'cyan', sub }: { label: string; value: string | number; color?: string; sub?: string }) {
   return (
@@ -109,7 +109,7 @@ export default function HUD() {
   const { data: metrics } = useQuery<MetricsResponse>({ queryKey: ['metrics'], queryFn: fetchMetrics, refetchInterval: 5000 });
   const { data: stats } = useQuery<StatsResponse>({ queryKey: ['stats'], queryFn: fetchStats, refetchInterval: 10000 });
   const { data: quality } = useQuery<MemoryQualityResponse>({ queryKey: ['quality'], queryFn: fetchMemoryQuality, refetchInterval: 30000 });
-  const { data: rtk } = useQuery<RtkSummary>({ queryKey: ['rtk-summary'], queryFn: fetchRtkSummary, refetchInterval: 10000 });
+  const { data: obelisk } = useQuery<ObeliskSummary>({ queryKey: ['obelisk-summary'], queryFn: fetchObeliskSummary, refetchInterval: 10000 });
 
   // Live waveform: 30 samples of memory counts fed over time
   const [wave, setWave] = useState<number[]>(() => Array(30).fill(0));
@@ -128,7 +128,7 @@ export default function HUD() {
     Math.min(1, (metrics?.totals?.agents ?? 0) / 20),
     Math.min(1, (metrics?.totals?.entities ?? 0) / 500),
     Math.min(1, (metrics?.totals?.sessions ?? 0) / 200),
-    Math.min(1, (metrics?.rtk?.total_events ?? 0) / 1000),
+    Math.min(1, (metrics?.obelisk?.total_events ?? 0) / 1000),
     Math.min(1, (metrics?.totals?.mind_events ?? 0) / 500),
     Math.min(1, (metrics?.totals?.reflections ?? 0) / 50),
     Math.min(1, (metrics?.totals?.proactive ?? 0) / 200),
@@ -160,7 +160,7 @@ export default function HUD() {
         <Stat label="entities" value={stats?.total_entities ?? 0} color="magenta" sub="graph nodes" />
         <Stat label="conclusions" value={stats?.total_conclusions ?? 0} color="amber" sub="durable" />
         <Stat label="avg conf" value={(quality?.avg_confidence ?? 0).toFixed(3)} color="green" sub="memory quality" />
-        <Stat label="rtk saved" value={((metrics?.rtk?.tokens_saved_estimate ?? 0) / 1000).toFixed(1) + 'k'} color="red" sub="tokens" />
+        <Stat label="obelisk saved" value={((metrics?.obelisk?.tokens_saved_estimate ?? 0) / 1000).toFixed(1) + 'k'} color="red" sub="tokens" />
       </div>
 
       {/* Middle: radar + recent events + waveform */}
@@ -173,7 +173,7 @@ export default function HUD() {
           </div>
         </div>
 
-        {/* Memory type + confidence distribution + RTK */}
+        {/* Memory type + confidence distribution + Obelisk */}
         <div className="grid grid-rows-3 gap-3 min-h-0">
           {/* Memory type spectrum */}
           <div className="nx-card overflow-auto">
@@ -197,21 +197,21 @@ export default function HUD() {
             </div>
           </div>
 
-          {/* RTK bar */}
+          {/* Obelisk bar */}
           <div className="nx-card">
-            <div className="text-[.62rem] text-[var(--color-cyan)] uppercase tracking-[.22em] mb-2">RTK Output Telemetry</div>
+            <div className="text-[.62rem] text-[var(--color-cyan)] uppercase tracking-[.22em] mb-2">Obelisk Output Telemetry</div>
             <div className="grid grid-cols-3 gap-2">
               <div className="border border-[var(--color-line)] p-2">
                 <div className="text-[.55rem] text-[var(--color-muted)] uppercase">events</div>
-                <div className="text-xl tabular-nums text-[var(--color-cyan)]">{rtk?.total_events ?? 0}</div>
+                <div className="text-xl tabular-nums text-[var(--color-cyan)]">{obelisk?.total_events ?? 0}</div>
               </div>
               <div className="border border-[var(--color-line)] p-2">
                 <div className="text-[.55rem] text-[var(--color-muted)] uppercase">failures</div>
-                <div className="text-xl tabular-nums" style={{ color: 'var(--color-red)' }}>{rtk?.failures ?? 0}</div>
+                <div className="text-xl tabular-nums" style={{ color: 'var(--color-red)' }}>{obelisk?.failures ?? 0}</div>
               </div>
               <div className="border border-[var(--color-line)] p-2">
                 <div className="text-[.55rem] text-[var(--color-muted)] uppercase">avg ms</div>
-                <div className="text-xl tabular-nums text-[var(--color-green)]">{rtk?.avg_duration_ms?.toFixed(0) ?? 0}</div>
+                <div className="text-xl tabular-nums text-[var(--color-green)]">{obelisk?.avg_duration_ms?.toFixed(0) ?? 0}</div>
               </div>
             </div>
           </div>

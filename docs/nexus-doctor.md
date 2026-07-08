@@ -1,7 +1,7 @@
 # Nexus Doctor
 
 `scripts/nexus-doctor` scans the computer for AI agents and IDEs that Nexus can
-connect to, checks local Nexus/RTK health, and can automatically write supported
+connect to, checks local Nexus health, and can automatically write supported
 configuration files.
 
 For multi-computer setup, install Tailscale on the Nexus host and every agent
@@ -29,8 +29,8 @@ config.json.nexus-backup-YYYYMMDD-HHMMSS
 ## What it checks
 
 - Nexus health at `/health`
-- RTK installation via `rtk gain`
-- `scripts/nexus-rtk` wrapper functionality
+- Obelisk installation via `obelisk doctor`
+- Obelisk command-output optimization is available when the `obelisk` binary is on PATH
 
 ## What it can connect
 
@@ -87,5 +87,5 @@ scripts/nexus-doctor --apply \
 - No writes unless `--apply` is provided.
 - All writes are backed up.
 - JSON configs are merged instead of replaced.
-- Raw command output is not stored; RTK telemetry goes through `scripts/nexus-rtk`
-  and `/v1/rtk/events`.
+- Raw command output is not stored; Obelisk telemetry goes through the Obelisk
+  command path and the durable memory tools.

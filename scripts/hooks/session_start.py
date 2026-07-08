@@ -23,7 +23,7 @@ SKILLS_CONTEXT = """MEMORY SKILLS AUTO-ACTIVE:
 - nexus-remember: Save codebase patterns, important facts, user preferences, and high-priority lessons to Nexus.
 - nexus-recall: Query Nexus (vector + BM25 + graph) before answering questions about past decisions, preferences, or prior work.
 - nexus-handoff: Leave notes for peer agents or rebuild the agent profile at the end of the session.
-RTK: prefer `rtk` for noisy shell commands to reduce token usage (git, ls, grep, pytest, docker, etc.)."""
+Obelisk: prefer `obelisk` for noisy shell commands to reduce token usage (git, ls, grep, pytest, docker, etc.)."""
 
 try:
     sid = start_session(title=f"{AGENT_ID} session in {PROJECT_KEY}", metadata={"hook": "SessionStart"})

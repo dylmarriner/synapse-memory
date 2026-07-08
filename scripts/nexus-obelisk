@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Run a command through RTK and report compact telemetry to Nexus.
+"""Run a command through Obelisk and report compact telemetry to Nexus.
 
 Usage:
-  nexus-rtk git status
-  nexus-rtk pytest
-  NEXUS_RTK_DURABLE=1 NEXUS_RTK_SUMMARY="pytest failed because migrations are missing" nexus-rtk pytest
+  nexus-obelisk git status
+  nexus-obelisk pytest
+  NEXUS_OBELISK_DURABLE=1 NEXUS_OBELISK_SUMMARY="pytest failed because migrations are missing" nexus-obelisk pytest
 
 This wrapper intentionally does not send raw command output to Nexus by default.
-It prints RTK-filtered output to stdout/stderr for the agent and posts metadata to
-/v1/rtk/events.
+It prints Obelisk-filtered output to stdout/stderr for the agent and posts
+metadata to the Obelisk event endpoint.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ def _estimate_tokens(chars: int) -> int:
 
 
 def _post_event(payload: dict) -> None:
-    url = os.getenv("NEXUS_URL", "http://localhost:7777").rstrip("/") + "/v1/rtk/events"
+    url = os.getenv("NEXUS_URL", "http://localhost:7777").rstrip("/") + "/v1/obelisk/events"
     secret = os.getenv("NEXUS_SECRET", "")
     if not secret:
         return
@@ -47,15 +47,15 @@ def _post_event(payload: dict) -> None:
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("Usage: nexus-rtk <command> [args...]", file=sys.stderr)
+        print("Usage: nexus-obelisk <command> [args...]", file=sys.stderr)
         return 2
-    if shutil.which("rtk") is None:
-        print("nexus-rtk: rtk not found on PATH", file=sys.stderr)
+    if shutil.which("obelisk") is None:
+        print("nexus-obelisk: obelisk not found on PATH", file=sys.stderr)
         return 127
 
     cmd = sys.argv[1:]
     started = time.time()
-    proc = subprocess.run(["rtk", *cmd], text=True, capture_output=True)
+    proc = subprocess.run(["obelisk", "run", *cmd], text=True, capture_output=True)
     duration_ms = int((time.time() - started) * 1000)
 
     if proc.stdout:
@@ -64,16 +64,14 @@ def main() -> int:
         print(proc.stderr, end="", file=sys.stderr)
 
     filtered_chars = len(proc.stdout) + len(proc.stderr)
-    # We do not know raw pre-filter chars from outside RTK. Keep this conservative;
-    # RTK's own `rtk gain` remains the source of truth for actual savings.
-    tokens_saved = int(os.getenv("NEXUS_RTK_TOKENS_SAVED", "0") or "0")
-    summary = os.getenv("NEXUS_RTK_SUMMARY", "").strip() or None
-    durable = os.getenv("NEXUS_RTK_DURABLE", "0").lower() in {"1", "true", "yes"}
+    tokens_saved = int(os.getenv("NEXUS_OBELISK_TOKENS_SAVED", "0") or "0")
+    summary = os.getenv("NEXUS_OBELISK_SUMMARY", "").strip() or None
+    durable = os.getenv("NEXUS_OBELISK_DURABLE", "0").lower() in {"1", "true", "yes"}
     if durable and summary is None and proc.returncode != 0:
-        summary = f"RTK-wrapped command failed: {' '.join(cmd[:3])} exited {proc.returncode}."
+        summary = f"Obelisk-wrapped command failed: {' '.join(cmd[:3])} exited {proc.returncode}."
 
     _post_event({
-        "agent_id": os.getenv("NEXUS_AGENT_ID", "rtk-agent"),
+        "agent_id": os.getenv("NEXUS_AGENT_ID", "obelisk-agent"),
         "command": " ".join(cmd),
         "exit_code": proc.returncode,
         "duration_ms": duration_ms,
@@ -83,9 +81,9 @@ def main() -> int:
         "tokens_saved_estimate": tokens_saved or _estimate_tokens(0),
         "summary": summary,
         "durable": durable,
-        "importance": float(os.getenv("NEXUS_RTK_IMPORTANCE", "0.55")),
-        "tags": ["rtk", "command"],
-        "metadata": {"wrapper": "nexus-rtk"},
+        "importance": float(os.getenv("NEXUS_OBELISK_IMPORTANCE", "0.55")),
+        "tags": ["obelisk", "command"],
+        "metadata": {"wrapper": "nexus-obelisk"},
     })
     return proc.returncode
 

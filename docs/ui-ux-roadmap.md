@@ -16,7 +16,7 @@ memory command center:
 - graph exploration
 - session timeline
 - contradictions and trust management
-- RTK token savings and cost avoidance
+- Obelisk token savings and cost avoidance
 - observability for memory operations
 
 The UI should answer three questions instantly:
@@ -83,7 +83,7 @@ Nexus UI response:
 - Operations page: worker health, Redis queue depth, failed jobs, consolidation
   runs, extraction stats.
 - Eval/benchmark page.
-- RTK savings widget and command categories.
+- Obelisk savings widget and command categories.
 - Install wizard for Claude/Cline/Windsurf/Cursor/OpenCode/Paperclip/OpenClaw.
 
 ## Recommended information architecture
@@ -94,7 +94,7 @@ Dashboard
 │  ├─ Memory totals
 │  ├─ Active agents
 │  ├─ Recall activity
-│  ├─ RTK savings
+│  ├─ Obelisk savings
 │  └─ System health
 ├─ Live Feed
 │  ├─ new memories
@@ -145,7 +145,7 @@ Dashboard
 └─ Integrations
    ├─ MCP configs
    ├─ IDE setup wizard
-   ├─ RTK setup
+   ├─ Obelisk setup
    ├─ SDK snippets
    └─ plugin status
 ```
@@ -191,13 +191,13 @@ Widgets:
 - Extraction queue depth
 - Worker health
 - Estimated prompt tokens injected
-- RTK estimated tokens saved
+- Obelisk estimated tokens saved
 
 Hero panel:
 
 ```text
 Nexus Memory Mesh
-4-mode recall · source-linked memory · RTK-optimized command context
+4-mode recall · source-linked memory · Obelisk-optimized command context
 ```
 
 ### 2. Live Feed
@@ -213,7 +213,7 @@ Event types:
 - `agent.context_loaded`
 - `session.ended`
 - `consolidation.completed`
-- `rtk.savings_updated`
+- `obelisk.savings_updated`
 
 Current backend only broadcasts basic `memory` events. Expand over time.
 
@@ -321,13 +321,13 @@ Show:
 - failed jobs
 - consolidation stats
 - DB index status
-- RTK installation/savings
+- Obelisk installation/savings
 
 Needed API:
 
 - `GET /v1/admin/metrics`
 - `GET /v1/admin/queues`
-- `GET /v1/admin/rtk`
+- `GET /v1/admin/obelisk`
 
 ## Frontend implementation options
 
@@ -386,11 +386,11 @@ Cons:
 - Add stat cards using `/v1/browse/stats`.
 - Add memory feed using `/v1/browse/memories` + `/v1/stream`.
 - Add agent cards using `/v1/browse/agents`.
-- Add RTK setup/status panel with instructions.
+- Add Obelisk setup/status panel with instructions.
 
 Implemented: zero-build dashboard now includes an Operations tab backed by
-`/v1/admin/metrics` and `/v1/admin/rtk/summary`, showing sessions, messages,
-RTK token savings, failures, per-agent RTK usage, and recent events.
+`/v1/admin/metrics` and `/v1/admin/obelisk/summary`, showing sessions, messages,
+Obelisk token savings, failures, per-agent Obelisk usage, and recent events.
 
 ### UI Phase 2 — Agent and memory detail drawers
 
@@ -464,7 +464,7 @@ Backend needed: `GET /v1/admin/memory-quality` (not yet implemented — in battl
    - Live feed
    - Memories
    - Agents
-   - Integrations/RTK
+   - Integrations/Obelisk
 
 2. Add backend metrics endpoint:
    - memory counts over time

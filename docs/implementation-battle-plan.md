@@ -438,7 +438,7 @@ These unblock the dashboard's Project Intelligence and Graph Explorer tabs.
 | SWE-agent | env bootstrap | `~/.sweagent/nexus.env` |
 | Continue.dev | MCP config | `~/.continue/config.json` (add `mcpServers` key) |
 | Zed | context server | `~/.config/zed/settings.json` (add `context_servers` key) |
-| GitHub Copilot | instructions | `.github/copilot-instructions.md` (append Nexus + RTK guidance) |
+| GitHub Copilot | instructions | `.github/copilot-instructions.md` (append Nexus + Obelisk guidance) |
 | Amp | MCP/settings | `~/.config/amp/settings.json` (format needs confirmation — dry-run first) |
 
 PearAI and JetBrains deferred (cloud/plugin-only, not local auto-connect).

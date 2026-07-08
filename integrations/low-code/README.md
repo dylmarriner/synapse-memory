@@ -12,7 +12,7 @@ POST {NEXUS_URL}/v1/memory/save
 POST {NEXUS_URL}/v1/memory/recall
 POST {NEXUS_URL}/v1/memory/reflect
 GET  {NEXUS_URL}/v1/agents/{agent_id}/context
-POST {NEXUS_URL}/v1/rtk/events
+POST {NEXUS_URL}/v1/obelisk/events
 ```
 
 Auth header:

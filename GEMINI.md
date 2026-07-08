@@ -1,4 +1,4 @@
-# Nexus + RTK Agent Instructions
+# Nexus + Obelisk Agent Instructions
 
 Nexus is available for durable memory.
 
@@ -7,8 +7,8 @@ Nexus is available for durable memory.
 - Agent ID: gemini-cli
 
 Use Nexus memory tools for durable preferences, lessons, fixes, decisions, and handoffs.
-Use `/home/macuntu/Documents/synapse-memory/scripts/nexus-rtk <command>` for noisy shell commands when possible;
-fall back to `rtk <command>` if the wrapper is unavailable.
+Use `/home/macuntu/Documents/synapse-memory/scripts/nexus-obelisk <command>` for noisy shell commands when possible;
+fall back to `obelisk <command>` if the wrapper is unavailable.
 Do not store raw command noise as memory; save durable summaries/lessons only.
 
 

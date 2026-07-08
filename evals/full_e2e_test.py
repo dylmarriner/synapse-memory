@@ -265,14 +265,14 @@ record("admin_memquality", "GET", "/v1/admin/memory-quality", status, body, dt, 
 status, body, dt = call("GET", "/v1/admin/consolidation-report")
 record("admin_consol_report", "GET", "/v1/admin/consolidation-report", status, body, dt, status == 200)
 
-status, body, dt = call("GET", "/v1/admin/rtk/summary")
-record("admin_rtk_summary", "GET", "/v1/admin/rtk/summary", status, body, dt, status == 200)
+status, body, dt = call("GET", "/v1/admin/obelisk/summary")
+record("admin_obelisk_summary", "GET", "/v1/admin/obelisk/summary", status, body, dt, status == 200)
 
-status, body, dt = call("GET", "/v1/admin/rtk/timeseries")
-record("admin_rtk_timeseries", "GET", "/v1/admin/rtk/timeseries", status, body, dt, status == 200)
+status, body, dt = call("GET", "/v1/admin/obelisk/timeseries")
+record("admin_obelisk_timeseries", "GET", "/v1/admin/obelisk/timeseries", status, body, dt, status == 200)
 
-status, body, dt = call("GET", "/v1/admin/rtk")
-record("admin_rtk", "GET", "/v1/admin/rtk", status, body, dt, status == 200)
+status, body, dt = call("GET", "/v1/admin/obelisk")
+record("admin_obelisk", "GET", "/v1/admin/obelisk", status, body, dt, status == 200)
 
 # ── Forget (cleanup) ──────────────────────────────────────────────────────
 section("Cleanup")

@@ -43,12 +43,12 @@ fi
 
 echo "$(date -Iseconds) changes detected — pushing to Nexus"
 
-# Find machine metadata first so the RTK event can reference it.
+# Find machine metadata first so the Obelisk event can reference it.
 hostname_short="${HOSTNAME_SHORT:-$(hostname -s)}"
 tailscale_ip=$(tailscale ip -4 2>/dev/null | head -1 || echo "")
 
-# Record RTK event (saves tokens-by-not-printing-raw-output).
-rtk_resp=$(curl -s -X POST "${NEXUS_URL}/v1/rtk/events" \
+# Record Obelisk event (saves tokens by not printing raw output).
+obelisk_resp=$(curl -s -X POST "${NEXUS_URL}/v1/obelisk/events" \
   -H "Authorization: Bearer ${NEXUS_SECRET}" \
   -H "Content-Type: application/json" \
   --max-time 15 \
@@ -65,11 +65,11 @@ print(json.dumps({
   'summary': 'Pushed ${#SOURCES[@]} source files to Nexus from ${hostname_short}',
   'durable': True,
   'importance': 0.55,
-  'tags': ['rtk', 'command'],
+  'tags': ['obelisk', 'command'],
   'metadata': {'wrapper': 'nexus-sync.sh'}
 }))")" 2>&1)
-if [ -z "$rtk_resp" ] || ! echo "$rtk_resp" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('recorded')" 2>/dev/null; then
-  echo "  ! rtk event failed: $rtk_resp"
+if [ -z "$obelisk_resp" ] || ! echo "$obelisk_resp" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('recorded')" 2>/dev/null; then
+  echo "  ! obelisk event failed: $obelisk_resp"
 fi
 
 pushed=0

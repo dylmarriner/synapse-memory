@@ -1,4 +1,4 @@
-"""RTK integration routes — command telemetry and optional durable lessons."""
+"""Obelisk integration routes — command telemetry and optional durable lessons."""
 
 import json
 import logging
@@ -10,9 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import broadcaster
 from app.db import get_db
 from app.memory.ingest import save_memory
-from app.models.api import MemorySaveRequest, RtkCommandEventRequest, RtkCommandEventResponse
+from app.models.api import MemorySaveRequest, ObeliskCommandEventRequest, ObeliskCommandEventResponse
 
-log = logging.getLogger("nexus.routers.rtk")
+log = logging.getLogger("nexus.routers.obelisk")
 router = APIRouter()
 
 
@@ -22,20 +22,20 @@ def _command_label(command: str) -> str:
     return " ".join(parts[:3]) if parts else "unknown"
 
 
-@router.post("/events", response_model=RtkCommandEventResponse)
-async def record_rtk_event(
-    body: RtkCommandEventRequest,
+@router.post("/events", response_model=ObeliskCommandEventResponse)
+async def record_obelisk_event(
+    body: ObeliskCommandEventRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-) -> RtkCommandEventResponse:
-    """Record an RTK-wrapped command event.
+) -> ObeliskCommandEventResponse:
+    """Record an Obelisk-wrapped command event.
 
     By default this stores only compact telemetry in the `events` table and emits
     an SSE event. It does not store raw command output. If `durable=true` and a
     summary is provided, the summary is saved as a normal Nexus memory.
     """
     detail = {
-        "kind": "rtk.command",
+        "kind": "obelisk.command",
         "agent_id": body.agent_id,
         "command_label": _command_label(body.command),
         "exit_code": body.exit_code,
@@ -45,13 +45,13 @@ async def record_rtk_event(
         "filtered_chars": body.filtered_chars,
         "tokens_saved_estimate": body.tokens_saved_estimate,
         "durable": body.durable,
-        "tags": sorted(set(["rtk", *body.tags])),
+        "tags": sorted(set(["obelisk", *body.tags])),
         "metadata": body.metadata,
     }
 
     result = await db.execute(text("""
         INSERT INTO events (project_key, actor, action, detail)
-        VALUES (:project_key, :actor, 'rtk.command', :detail)
+        VALUES (:project_key, :actor, 'obelisk.command', :detail)
         RETURNING id
     """), {
         "project_key": str(body.metadata.get("project") or body.cwd or "default")[:200],
@@ -64,7 +64,7 @@ async def record_rtk_event(
     memory_id = None
     saved_memory = False
     if body.durable and body.summary and body.summary.strip():
-        tags = sorted(set(["rtk", "command-event", *body.tags]))
+        tags = sorted(set(["obelisk", "command-event", *body.tags]))
         req = MemorySaveRequest(
             content=body.summary.strip(),
             agent_id=body.agent_id,
@@ -73,8 +73,8 @@ async def record_rtk_event(
             tags=tags,
             metadata={
                 **body.metadata,
-                "source": "rtk",
-                "rtk_event_id": event_id,
+                "source": "obelisk",
+                "obelisk_event_id": event_id,
                 "command_label": _command_label(body.command),
                 "exit_code": body.exit_code,
                 "duration_ms": body.duration_ms,
@@ -84,7 +84,7 @@ async def record_rtk_event(
         memory_id = saved.id
         saved_memory = not saved.deduplicated
 
-    await broadcaster.broadcast("rtk", {
+    await broadcaster.broadcast("obelisk", {
         "id": event_id,
         "agent_id": body.agent_id,
         "command_label": _command_label(body.command),
@@ -93,7 +93,7 @@ async def record_rtk_event(
         "memory_id": memory_id,
     })
 
-    return RtkCommandEventResponse(
+    return ObeliskCommandEventResponse(
         recorded=True,
         event_id=event_id,
         memory_id=memory_id,

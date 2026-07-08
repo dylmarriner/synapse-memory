@@ -218,9 +218,9 @@ class AgentTransferResponse(BaseModel):
     memory_ids: List[str] = Field(default_factory=list)
 
 
-# ── RTK integration models ───────────────────────────────────────────────────
+# ── Obelisk integration models ───────────────────────────────────────────────────
 
-class RtkCommandEventRequest(BaseModel):
+class ObeliskCommandEventRequest(BaseModel):
     agent_id: str = "default"
     command: str = Field(min_length=1, max_length=2000)
     exit_code: int = 0
@@ -237,7 +237,7 @@ class RtkCommandEventRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
-class RtkCommandEventResponse(BaseModel):
+class ObeliskCommandEventResponse(BaseModel):
     recorded: bool
     event_id: Optional[str] = None
     memory_id: Optional[str] = None

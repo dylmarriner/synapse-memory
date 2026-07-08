@@ -1,7 +1,7 @@
 # Competitive Memory Roadmap
 
 Goal: make Nexus a stronger open, self-hosted agent memory system than
-BrainSync, Honcho, Hindsight, and AgentMemory while using RTK to reduce live
+BrainSync, Honcho, Hindsight, and AgentMemory while using Obelisk to reduce live
 command-output tokens.
 
 ## Competitor landscape
@@ -96,7 +96,7 @@ Nexus response:
 
 - Add memory operation telemetry and evals.
 - Add durable event log and retry/dead-letter queues.
-- Add dashboard metrics for saves, recalls, hit rate, token cost, and RTK gain.
+- Add dashboard metrics for saves, recalls, hit rate, token cost, and Obelisk gain.
 - Publish benchmark tasks covering preference recall, correction recall,
   stale-memory suppression, project facts, and cross-agent handoff.
 
@@ -115,8 +115,8 @@ Recall: vector + lexical + graph + temporal + optional reranker
   ↓
 Token-bounded context packs, MCP tools, REST/OpenAPI, SDKs
 
-RTK runs beside this pipeline:
-agent shell command → rtk filter → compact output to LLM
+Obelisk runs beside this pipeline:
+agent shell command → Obelisk filter → compact output to LLM
 ```
 
 ## Principles
@@ -139,7 +139,7 @@ agent shell command → rtk filter → compact output to LLM
 5. **Coding agents need codebase memory.**
    Index rules, file summaries, symbols, architectural decisions, and known fixes.
 
-6. **RTK reduces live token noise; Nexus preserves durable knowledge.**
+6. **Obelisk reduces live token noise; Nexus preserves durable knowledge.**
 
 7. **The UI is part of the memory product.**
    Users need to see live learning, source-linked beliefs, recall quality, agent
@@ -247,7 +247,7 @@ Add metrics:
 - average results returned
 - memories accessed/confirmed/contradicted
 - estimated prompt tokens injected
-- RTK savings if available via `rtk gain`
+- Obelisk savings if available via `obelisk stats`
 
 Add eval tasks:
 
@@ -274,7 +274,7 @@ Build the dashboard into a premium agent memory command center:
 - recall lab
 - graph explorer
 - operations/worker health
-- RTK savings panel
+- Obelisk savings panel
 
 See `docs/ui-ux-roadmap.md` for detailed information architecture and phased UI
 delivery.
@@ -305,7 +305,7 @@ apps, and agent frameworks:
 - generate env bootstraps for containerized/local agent runtimes;
 - generate OpenAPI import docs/templates for tools like Dify, Flowise, Langflow,
   n8n, OpenWebUI, LibreChat, and AnythingLLM;
-- include RTK wrapper guidance so shell-capable agents use `scripts/nexus-rtk`.
+- include Obelisk wrapper guidance so shell-capable agents use `obelisk`.
 
 High-priority connector targets are tracked in `docs/agent-target-registry.md`.
 
@@ -322,8 +322,8 @@ Status of original tasks:
 3. ✓ Update hooks to append raw user/assistant/session events.
 4. ✓ Link extracted memories back to source messages.
 5. ✓ Add `/v1/agents/{id}/card`.
-6. ✓ Add `/v1/admin/metrics` and RTK gain capture.
-7. ✓ RTK summary and timeseries admin endpoints.
+6. ✓ Add `/v1/admin/metrics` and Obelisk gain capture.
+7. ✓ Obelisk summary and timeseries admin endpoints.
 8. ✓ Nexus Doctor: Gemini CLI, Qwen Code, Codex CLI, Goose, Roo/Kilo variants,
       project instruction files, OpenHands/SWE-agent env templates, low-code
       OpenAPI templates.
@@ -336,16 +336,16 @@ Sprint 3 (observability+privacy): OTEL instrumentation, export+forget endpoints
 Sprint 4 (infra/DX): agent peer merge, embedded install mode, tree-sitter AST indexing
 Sprint 5 (dashboard+federation): memory quality dashboard, P2P agent federation
 
-## RTK role
+## Obelisk role
 
-RTK should be installed and encouraged for every agent shell environment:
+Obelisk should be installed and encouraged for every agent shell environment:
 
 ```bash
-bash scripts/setup-rtk.sh
-RTK_INIT_CLAUDE=1 bash scripts/setup-rtk.sh
+bash scripts/setup-obelisk.sh
+OBELISK_INIT_CLAUDE=1 bash scripts/setup-obelisk.sh
 ```
 
-Use RTK for:
+Use Obelisk for:
 
 - `git status`, `git diff`, `git log`
 - `ls`, `tree`, `grep`, `rg`, `read`

@@ -142,7 +142,7 @@ export default function Layout({ activeTab, onTabChange, children }: LayoutProps
           { label: 'entities', value: metrics?.totals?.entities, color: 'magenta' },
           { label: 'sessions', value: metrics?.totals?.sessions, color: 'amber' },
           { label: '24h events', value: Object.values(metrics?.last_24h ?? {}).reduce((a, b) => a + b, 0), color: 'green' },
-          { label: 'rtk events', value: metrics?.rtk?.total_events, color: 'red' },
+          { label: 'obelisk events', value: metrics?.obelisk?.total_events, color: 'red' },
         ].map((s) => (
           <div key={s.label} className="nx-card relative overflow-hidden">
             <div className="absolute -right-4 -top-4 w-10 h-10 border border-[rgba(102,252,241,.18)] rotate-45" />
@@ -168,7 +168,7 @@ export default function Layout({ activeTab, onTabChange, children }: LayoutProps
         <span className="text-[var(--color-muted)] tabular-nums">{now.toISOString().slice(0, 10)}</span>
         <span className="text-[var(--color-muted)] tabular-nums ml-auto">{now.toISOString().slice(11, 19)} UTC</span>
         <span className="text-[var(--color-dim)]">·</span>
-        <span className="text-[var(--color-muted)]">{formatBytes(metrics?.rtk?.tokens_saved_estimate)} tokens saved</span>
+        <span className="text-[var(--color-muted)]">{formatBytes(metrics?.obelisk?.tokens_saved_estimate)} tokens saved</span>
       </div>
     </div>
   );

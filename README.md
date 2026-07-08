@@ -447,7 +447,7 @@ mypy app/
 - [Integration Guide](UNIVERSAL_AGENT_INTEGRATION.md)
 - [Agent + Tailscale Connection Guide](docs/agent-connection-tailscale.md)
 - [Nexus Doctor](docs/nexus-doctor.md)
-- [RTK Integration](docs/rtk-integration.md)
+- [Obelisk Integration](docs/obelisk-integration.md)
 - [MCP Plugin Examples](integrations/plugins/)
 - [Agent Skills](integrations/skills/)
 - [SDK Documentation](sdk/)

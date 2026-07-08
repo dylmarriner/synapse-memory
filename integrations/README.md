@@ -49,33 +49,33 @@ Some clients need the SSE endpoint too:
 http://100.93.75.87:7777/mcp/sse
 ```
 
-## RTK command-output optimization
+## Obelisk command-output optimization
 
-Use Nexus for durable memory and RTK for compact shell-command output. RTK is a
+Use Nexus for durable memory and Obelisk for compact shell-command output. Obelisk is a
 CLI proxy/filter, not a memory database.
 
 ```bash
-bash scripts/setup-rtk.sh
+bash scripts/setup-obelisk.sh
 # Optional Claude hook patch:
-RTK_INIT_CLAUDE=1 bash scripts/setup-rtk.sh
+OBELISK_INIT_CLAUDE=1 bash scripts/setup-obelisk.sh
 ```
 
 Agents should prefer:
 
 ```bash
-rtk git status
-rtk git diff
-rtk grep "pattern" .
-rtk pytest
+obelisk run git status
+obelisk run git diff
+obelisk run grep "pattern" .
+obelisk run pytest
 ```
 
-See `docs/rtk-integration.md` for the full integration policy.
+See `docs/obelisk-integration.md` for the full integration policy.
 
-Per-agent RTK snippets are in `integrations/rtk/`. Generate local ready-to-copy
+Per-agent Obelisk snippets are in `integrations/obelisk/`. Generate local ready-to-copy
 instructions with:
 
 ```bash
-bash scripts/connect-rtk-agents.sh
+bash scripts/connect-obelisk-agents.sh
 ```
 
 Supported guidance targets: Cline, Claude, Devin CLI, Hermes, OpenClaw, OpenCode.

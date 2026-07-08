@@ -63,7 +63,7 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 import type {
   StatsResponse,
   MetricsResponse,
-  RtkSummary,
+  ObeliskSummary,
   BrowseMemoriesResponse,
   BrowseMemory,
   AgentSummary,
@@ -88,8 +88,8 @@ export async function fetchMetrics(): Promise<MetricsResponse> {
   return apiFetch<MetricsResponse>('/v1/admin/metrics');
 }
 
-export async function fetchRtkSummary(): Promise<RtkSummary> {
-  return apiFetch<RtkSummary>('/v1/admin/rtk/summary');
+export async function fetchObeliskSummary(): Promise<ObeliskSummary> {
+  return apiFetch<ObeliskSummary>('/v1/admin/obelisk/summary');
 }
 
 export async function fetchMemoryQuality(): Promise<MemoryQualityResponse> {
