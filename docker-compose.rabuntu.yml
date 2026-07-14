@@ -1,0 +1,135 @@
+name: nexus
+
+services:
+
+  # ── Data layer ───────────────────────────────────────────────────────────
+
+  postgres:
+    image: pgvector/pgvector:0.8.0-pg17
+    environment:
+      POSTGRES_USER: nexus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexuspassword}
+      POSTGRES_DB: nexus
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    ports:
+      - "127.0.0.1:5435:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexus"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.2.2-alpine
+    ports:
+      - "127.0.0.1:6381:6379"
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Application layer ────────────────────────────────────────────────────
+
+  nexus-api:
+    build: .
+    volumes:
+      - .:/app:ro
+    ports:
+      - "0.0.0.0:${NEXUS_PORT:-7777}:7777"
+    environment:
+      NEXUS_SECRET: ${NEXUS_SECRET}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      DATABASE_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD:-nexuspassword}@postgres:5432/nexus
+      REDIS_URL: redis://redis:6379/0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_DIMS: ${EMBEDDING_DIMS:-384}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
+      MIND_LLM_MODEL: ${MIND_LLM_MODEL:-deepseek-chat}
+      MIND_FALLBACK_MODEL: ${MIND_FALLBACK_MODEL:-deepseek-chat}
+      MIND_REFLECTION_ENABLED: ${MIND_REFLECTION_ENABLED:-true}
+      MIND_REFLECTION_MIND_ID: ${MIND_REFLECTION_MIND_ID:-nexus}
+      MIND_REFLECTION_INTERVAL_SECONDS: ${MIND_REFLECTION_INTERVAL_SECONDS:-1800}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      MIND_ENABLE_EXTRACT: ${MIND_ENABLE_EXTRACT:-true}
+      MIND_ENABLE_VERIFY: ${MIND_ENABLE_VERIFY:-true}
+      MIND_ENABLE_LLM_PROACTIVE: ${MIND_ENABLE_LLM_PROACTIVE:-true}
+      MIND_ENABLE_LLM_OPINION: ${MIND_ENABLE_LLM_OPINION:-true}
+      MIND_ENABLE_RELATED_GRAPH: ${MIND_ENABLE_RELATED_GRAPH:-true}
+      NEXUS_DISABLE_AUTH: ${NEXUS_DISABLE_AUTH:-false}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      RECALL_MIN_RELEVANCE: ${RECALL_MIN_RELEVANCE:-0.0}
+      RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
+      RERANKER_PROVIDER: ${RERANKER_PROVIDER:-none}
+      RERANK_TOP_K: ${RERANK_TOP_K:-30}
+      USE_ACTIVE_MEMORY: ${USE_ACTIVE_MEMORY:-false}
+      LLM_QUERY_EXPANSION: ${LLM_QUERY_EXPANSION:-false}
+      LLM_QUERY_EXPANSION_MIN_CHARS: ${LLM_QUERY_EXPANSION_MIN_CHARS:-80}
+      CONTEXT_MEMORY_LIMIT: ${CONTEXT_MEMORY_LIMIT:-10}
+      CONTEXT_MEMORY_CHAR_LIMIT: ${CONTEXT_MEMORY_CHAR_LIMIT:-200}
+      CONTEXT_CONCLUSION_LIMIT: ${CONTEXT_CONCLUSION_LIMIT:-5}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  nexus-worker:
+    build: .
+    volumes:
+      - .:/app:ro
+    environment:
+      NEXUS_SECRET: ${NEXUS_SECRET}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      DATABASE_URL: postgresql+asyncpg://nexus:${POSTGRES_PASSWORD:-nexuspassword}@postgres:5432/nexus
+      REDIS_URL: redis://redis:6379/0
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
+      MIND_LLM_MODEL: ${MIND_LLM_MODEL:-deepseek-chat}
+      MIND_FALLBACK_MODEL: ${MIND_FALLBACK_MODEL:-deepseek-chat}
+      MIND_REFLECTION_ENABLED: ${MIND_REFLECTION_ENABLED:-true}
+      MIND_REFLECTION_MIND_ID: ${MIND_REFLECTION_MIND_ID:-nexus}
+      MIND_REFLECTION_INTERVAL_SECONDS: ${MIND_REFLECTION_INTERVAL_SECONDS:-1800}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      EMBEDDING_DIMS: ${EMBEDDING_DIMS:-384}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_COST_SAVER: ${LLM_COST_SAVER:-true}
+      LLM_INPUT_CHAR_LIMIT: ${LLM_INPUT_CHAR_LIMIT:-1200}
+      LLM_EXTRACT_MAX_TOKENS: ${LLM_EXTRACT_MAX_TOKENS:-180}
+      LLM_SUMMARY_MAX_TOKENS: ${LLM_SUMMARY_MAX_TOKENS:-220}
+      LLM_REFLECT_MAX_TOKENS: ${LLM_REFLECT_MAX_TOKENS:-300}
+      CONFIDENCE_DECAY_RATE: ${CONFIDENCE_DECAY_RATE:-0.95}
+      CONFIDENCE_DECAY_INTERVAL_DAYS: ${CONFIDENCE_DECAY_INTERVAL_DAYS:-7}
+      CONFIDENCE_FLOOR: ${CONFIDENCE_FLOOR:-0.1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: ["python", "/app/app/worker.py"]
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/nexus-worker-heartbeat && test -n \"$(find /tmp/nexus-worker-heartbeat -mmin -1 2>/dev/null)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
